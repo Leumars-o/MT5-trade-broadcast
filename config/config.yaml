@@ -1,0 +1,36 @@
+# Non-secret configuration. Secrets go in .env (see .env.example).
+# ${VAR} placeholders are resolved from the environment at load time.
+
+master:
+  metaapi_account_id: ${METAAPI_ACCOUNT_ID}
+  server_timezone: "Etc/GMT-3"        # VERIFY against the broker
+  poll_interval_seconds: 2
+
+symbols:
+  XAUUSD.f:
+    destination_symbol: XAUUSD
+    contract_size_fallback: 100
+
+risk:
+  mae_points: 4.64                    # from mt5_risk_audit.py p95 — PLACEHOLDER
+  buffer_multiplier: 2.0
+  commission_per_lot: 10.0
+  daily_dd_limit: 2500
+  max_dd_limit: 5000
+  utilisation_target: 0.15            # start low; see ARCHITECTURE.md §10
+  destination_equity: 50000
+
+governor:
+  soft_threshold_pct: 0.60
+  hard_threshold_pct: 0.85
+
+telegram:
+  bot_token: ${TELEGRAM_BOT_TOKEN}
+  chat_id: ${TELEGRAM_CHAT_ID}
+
+health:
+  stale_feed_minutes: 5
+  daily_summary_time: "22:00"
+  max_expected_hold_minutes: 240
+
+display_timezone: "Africa/Lagos"
