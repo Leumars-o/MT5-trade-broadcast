@@ -14,11 +14,13 @@ from collections.abc import AsyncIterator
 from datetime import datetime
 from pathlib import Path
 
-import pandas as pd
-
 from ..models import Direction, Position, SymbolSpec
 from ..timeutil import to_utc
 from .base import FeedUpdate
+
+# pandas is heavy (~60 MB) and only the xlsx-parsing path needs it. It is
+# imported lazily inside the parsing helpers so the live feed (`--live`), which
+# never touches this path, does not pay for it.
 
 # Fallback contract sizes (oz per standard lot). Live feeds must fetch these from
 # the broker; here they only populate SymbolSpec for replayed data.
@@ -37,6 +39,8 @@ def parse_positions(path: str | Path, server_tz: str | None = None) -> list[Posi
     removing rows between versions (mirrors ``mt5_risk_audit.parse_mt5_report``).
     Report times are naive server-local; ``server_tz`` converts them to UTC.
     """
+    import pandas as pd
+
     raw = pd.read_excel(path, sheet_name=0, header=None)
     col0 = raw[0].astype(str)
 
@@ -93,6 +97,8 @@ def parse_positions(path: str | Path, server_tz: str | None = None) -> list[Posi
 
 
 def _opt_float(v: object) -> float | None:
+    import pandas as pd
+
     f = pd.to_numeric(v, errors="coerce")
     if pd.isna(f) or f == 0:
         return None
@@ -100,6 +106,8 @@ def _opt_float(v: object) -> float | None:
 
 
 def _coerce_dt(v: object, server_tz: str | None) -> datetime | None:
+    import pandas as pd
+
     if v is None or pd.isna(v):
         return None
     return to_utc(pd.Timestamp(v).to_pydatetime(), assume_tz=server_tz)
