@@ -161,3 +161,32 @@ class CloseEstimate:
     fee_drag_usd: Decimal
     net_usd: Decimal
     destination_lots: float
+
+
+class AnomalyKind(StrEnum):
+    """Tripwires that fire a distinct CRITICAL alert, separate from trade signals
+    (ARCHITECTURE.md §5.5)."""
+
+    VOLUME_STEP = "volume_step"      # volume ≥ 2× the previous master trade
+    DIRECTION_PNL = "direction_pnl"  # direction field disagrees with the P&L sign
+    CONTRACT_DRIFT = "contract_drift"  # implied contract size drifts from spec
+    OVER_HOLD = "over_hold"          # open beyond max_expected_hold_minutes
+
+
+@dataclass(frozen=True, slots=True)
+class Anomaly:
+    """A tripwire hit. Carries structured numeric context; the formatter renders
+    the message so the detector stays pure and numeric."""
+
+    kind: AnomalyKind
+    position_id: str
+    symbol: str
+    previous_volume: float | None = None
+    current_volume: float | None = None
+    ratio: float | None = None
+    consecutive: int | None = None
+    expected_contract: float | None = None
+    implied_contract: float | None = None
+    drift_pct: float | None = None
+    held_minutes: float | None = None
+    limit_minutes: float | None = None

@@ -13,10 +13,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from .config import Settings, load_settings
+from .core.anomaly import AnomalyDetector
 from .core.governor import DailyGovernor
 from .core.risk import estimate_close, size_position
 from .core.tracker import PositionTracker
@@ -24,7 +26,7 @@ from .feed.base import FeedUpdate
 from .feed.replay_feed import ReplayFeed
 from .health import HealthMonitor
 from .logging_config import configure_logging, get_logger
-from .models import EventType, Position, PositionEvent, SizingDecision
+from .models import Anomaly, EventType, Position, PositionEvent, SizingDecision
 from .notify import formatter
 from .notify.dispatcher import AlertDispatcher
 from .notify.telegram import TelegramNotifier
@@ -124,6 +126,21 @@ def _describe_modified(event: PositionEvent) -> str:
     return f"✏️ MODIFY {p.direction.upper()} {p.symbol}  ·  #{p.position_id}  [{detail}]"
 
 
+async def _emit(
+    *, position_id: str, event_type: str, message: str, now: datetime,
+    broker_event_time: datetime | None, dispatcher: AlertDispatcher | None,
+) -> None:
+    """Print an alert and, when a sink is configured, dispatch it idempotently."""
+    print(message)
+    if dispatcher is not None:
+        result = await dispatcher.dispatch(
+            position_id=position_id, event_type=event_type, message=message,
+            detected_at=now, broker_event_time=broker_event_time, now=now,
+        )
+        print(f"   → {result.value}")
+    print()
+
+
 async def consume_feed(
     feed: Any,
     settings: Settings,
@@ -132,11 +149,11 @@ async def consume_feed(
     dispatcher: AlertDispatcher | None = None,
     repo: Repo | None = None,
     monitor: HealthMonitor | None = None,
+    detector: AnomalyDetector | None = None,
 ) -> int:
     """Drive one feed through the pipeline. Honours resync, persists position
-    state for restart recovery, prints, and optionally dispatches. When a
-    ``monitor`` is supplied, each snapshot beats the heartbeat and each alert is
-    counted for the daily summary."""
+    state for restart recovery, runs anomaly tripwires, beats the heartbeat, and
+    dispatches. Returns the number of trade alerts emitted."""
     pipeline = Pipeline(feed, settings)
     total = 0
     async for update in feed.stream():
@@ -145,29 +162,52 @@ async def consume_feed(
         if monitor is not None:
             monitor.record_snapshot(now)
         events = tracker.diff(update.positions, now=now, resync=update.resync)
+
         for ev in events:
             if repo is not None:
                 repo.upsert_position(ev.position, _STATE_FOR_EVENT[ev.event_type], now=now)
+            anomalies = await _detect(detector, feed, ev)
+            for a in anomalies:
+                await _emit(
+                    position_id=a.position_id, event_type=f"anomaly:{a.kind.value}",
+                    message=formatter.format_anomaly(a), now=now,
+                    broker_event_time=_broker_time(ev), dispatcher=dispatcher,
+                )
             message = await pipeline.handle(ev)
             if not message:
                 continue
-            print(message)
             total += 1
             if monitor is not None:
                 broker_time = _broker_time(ev)
                 monitor.record_signal(int(max(0.0, (now - broker_time).total_seconds() * 1000)))
-            if dispatcher is not None:
-                result = await dispatcher.dispatch(
-                    position_id=ev.position_id,
-                    event_type=_event_key(ev),
-                    message=message,
-                    detected_at=now,
-                    broker_event_time=_broker_time(ev),
-                    now=now,
+            await _emit(
+                position_id=ev.position_id, event_type=_event_key(ev), message=message,
+                now=now, broker_event_time=_broker_time(ev), dispatcher=dispatcher,
+            )
+
+        if detector is not None:
+            for a in detector.check_holds(update.positions, now):
+                await _emit(
+                    position_id=a.position_id, event_type=f"anomaly:{a.kind.value}",
+                    message=formatter.format_anomaly(a), now=now,
+                    broker_event_time=None, dispatcher=dispatcher,
                 )
-                print(f"   → {result.value}")
-            print()
     return total
+
+
+async def _detect(
+    detector: AnomalyDetector | None, feed: Any, ev: PositionEvent
+) -> list[Anomaly]:
+    """Run per-event tripwires (volume step on open, direction/drift on close)."""
+    if detector is None:
+        return []
+    if ev.event_type is EventType.OPENED:
+        one = detector.on_open(ev.position)
+        return [one] if one is not None else []
+    if ev.event_type is EventType.CLOSED:
+        spec = await feed.symbol_spec(ev.position.symbol)
+        return detector.on_close(ev.position, spec)
+    return []
 
 
 # ---------------------------------------------------------------- run modes
@@ -213,6 +253,9 @@ async def run_live(settings: Settings, token: str, db: str) -> None:
             repo, dispatcher, settings.health,
             display_tz=settings.display_timezone, provenance=_provenance(settings),
         )
+        detector = AnomalyDetector(
+            max_hold_minutes=settings.health.max_expected_hold_minutes
+        )
         feed = MetaApiFeed(
             token, settings.master.metaapi_account_id,
             read_only=settings.master.read_only,
@@ -223,7 +266,8 @@ async def run_live(settings: Settings, token: str, db: str) -> None:
         health_task = asyncio.create_task(monitor.run(stop))
         try:
             await consume_feed(
-                feed, settings, tracker, dispatcher=dispatcher, repo=repo, monitor=monitor
+                feed, settings, tracker, dispatcher=dispatcher, repo=repo,
+                monitor=monitor, detector=detector,
             )
         finally:
             stop.set()

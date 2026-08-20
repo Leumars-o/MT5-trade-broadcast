@@ -13,6 +13,8 @@ from decimal import Decimal
 
 from ..core.governor import GovernorAssessment
 from ..models import (
+    Anomaly,
+    AnomalyKind,
     CloseEstimate,
     Direction,
     GovernorVerdict,
@@ -201,6 +203,41 @@ def format_refusal(
 
 
 # ---------------------------------------------------------------- health / anomaly
+
+
+def format_anomaly(anomaly: Anomaly) -> str:
+    """Render a CRITICAL tripwire alert (§8), distinct from trade signals."""
+    tag = f"  ·  #{anomaly.position_id}"
+    if anomaly.kind is AnomalyKind.VOLUME_STEP:
+        ratio = anomaly.ratio or 0.0
+        seq = ""
+        if anomaly.consecutive and anomaly.consecutive >= 2:
+            seq = f"{anomaly.consecutive} consecutive steps. "
+        return (
+            f"⚠️ VOLUME STEP {ratio:.1f}× {anomaly.symbol}{tag}\n"
+            f"Previous: {_g(anomaly.previous_volume or 0)} → now "
+            f"{_g(anomaly.current_volume or 0)}\n"
+            f"{seq}Review before acting."
+        )
+    if anomaly.kind is AnomalyKind.DIRECTION_PNL:
+        return (
+            f"⚠️ DIRECTION/P&L MISMATCH {anomaly.symbol}{tag}\n"
+            "Recorded direction disagrees with the sign of realised profit — a "
+            "mirrored trade would run backwards. Do not act."
+        )
+    if anomaly.kind is AnomalyKind.CONTRACT_DRIFT:
+        return (
+            f"⚠️ CONTRACT SIZE DRIFT {anomaly.symbol}{tag}\n"
+            f"Implied {_g(anomaly.implied_contract or 0)} vs spec "
+            f"{_g(anomaly.expected_contract or 0)} "
+            f"({(anomaly.drift_pct or 0):.1%}). Verify oz/lot before trusting $ figures."
+        )
+    # OVER_HOLD
+    return (
+        f"⚠️ OVER-HOLD {anomaly.symbol}{tag}\n"
+        f"Open {fmt_duration((anomaly.held_minutes or 0) * 60)} — past the "
+        f"{anomaly.limit_minutes:g}m expected max. Master may be stuck."
+    )
 
 
 def format_health_stale(now: datetime, last_snapshot: datetime, threshold_minutes: float) -> str:

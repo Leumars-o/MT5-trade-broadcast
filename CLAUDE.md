@@ -55,8 +55,9 @@ Milestones M1, M2, and M3 are implemented:
 
 - M5 (in progress): `health.py` — HealthMonitor (heartbeat, stale-feed
   dead-man's switch, disconnect/reconnect alerts, daily summary surfacing the
-  stop-basis provenance). Wired as a parallel task in `--live`. Anomaly
-  tripwires and the `log-fill` CLI are still TODO.
+  stop-basis provenance). `core/anomaly.py` — AnomalyDetector tripwires
+  (volume-step ≥2×, direction/P&L mismatch, contract drift, over-hold), wired
+  into the pipeline. The `log-fill` CLI is still TODO.
 
 See ARCHITECTURE.md §9 for the milestone order.
 
