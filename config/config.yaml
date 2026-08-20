@@ -3,7 +3,11 @@
 
 master:
   metaapi_account_id: ${METAAPI_ACCOUNT_ID}
-  server_timezone: "Etc/GMT-3"        # VERIFY against the broker
+  # TMFinancials-Server verified at UTC+3 on 2026-08-20 (Etc/GMT-3 == UTC+3).
+  # Only used by the xlsx replay path; the live MetaApi feed returns UTC times.
+  # CAVEAT: if the broker observes DST (EET/EEST +2/+3), this fixed offset drifts
+  # 1h in winter — switch to Europe/Bucharest if so. Re-verify before late Oct.
+  server_timezone: "Etc/GMT-3"
   poll_interval_seconds: 2
 
 symbols:
@@ -12,13 +16,24 @@ symbols:
     contract_size_fallback: 100
 
 risk:
-  mae_points: 4.64                    # from mt5_risk_audit.py p95 — PLACEHOLDER
-  buffer_multiplier: 2.0
+  # Derived from a 74-trade sample (2 Jun–14 Aug 2026). The realised-loss
+  # distribution stops dead at 3.90 pts → the master runs a virtual ~4pt stop.
+  stop_basis_points: 3.90             # p100 worst realised loss (NOT floating MAE)
+  buffer_multiplier: 1.5              # 3.90 × 1.5 = 5.85pt synthesised stop
+  # Sizing is balance-proportional, not risk-based: the master trades a constant
+  # ~0.00077 lots per $1k (CoV 0.75% across 74 trades). 1× = native profile,
+  # where the measured 86.5% win / 1.79 R:R was observed. Raising this leverages
+  # the strategy (every size discussed earlier was 11–60× native) — do not,
+  # without evidence the edge survives gold slippage at larger size.
+  native_lots_per_1k: 0.00077
+  size_multiplier: 1.0
   commission_per_lot: 10.0
+  fee_drag_pct: 0.26                  # weekly PF deduction ≈ 26% of gross profit
   daily_dd_limit: 2500
   max_dd_limit: 5000
-  utilisation_target: 0.15            # start low; see ARCHITECTURE.md §10
+  utilisation_target: 0.15            # PER-TRADE RISK CAP now, not the size driver
   destination_equity: 50000
+  mae_points: null                    # floating MAE STILL UNMEASURED — see §10
 
 governor:
   soft_threshold_pct: 0.60

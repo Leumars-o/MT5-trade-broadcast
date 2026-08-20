@@ -1,5 +1,5 @@
-"""RiskEngine: sizing math ported from mt5_risk_audit.py, pinned to the §8
-message-contract numbers, plus the refuse-to-size rules."""
+"""RiskEngine: balance-proportional sizing with a risk cap, the ~4pt stop
+derived from the 74-trade loss distribution, and fee-drag-aware close estimates."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from copier.config import RiskConfig
 from copier.core.risk import (
     estimate_close,
     floor_to_step,
+    native_lots,
     protective_stop_price,
     signed_points,
     size_position,
@@ -19,11 +20,14 @@ from copier.models import SizingDecision, SizingRefused, SymbolSpec
 
 from .conftest import at, make_position
 
-# Config matching the ARCHITECTURE.md §7 / §8 worked example.
+# Config matching config.yaml after the 74-trade re-derivation.
 CFG = RiskConfig(
-    mae_points=4.64,
-    buffer_multiplier=2.0,
+    stop_basis_points=3.90,
+    buffer_multiplier=1.5,
+    native_lots_per_1k=0.00077,
+    size_multiplier=1.0,
     commission_per_lot=10.0,
+    fee_drag_pct=0.26,
     daily_dd_limit=2500,
     max_dd_limit=5000,
     utilisation_target=0.15,
@@ -31,50 +35,61 @@ CFG = RiskConfig(
 )
 
 XAU = SymbolSpec(
-    symbol="XAUUSD.f",
-    contract_size=100.0,
-    lot_step=0.01,
-    min_lot=0.01,
-    max_lot=100.0,
-    digits=2,
-    tick_value=1.0,
-    from_fallback=True,
+    symbol="XAUUSD.f", contract_size=100.0, lot_step=0.01, min_lot=0.01,
+    max_lot=100.0, digits=2, tick_value=1.0, from_fallback=True,
 )
 
 
 def test_floor_to_step_rounds_down():
-    assert floor_to_step(0.4040, 0.01) == pytest.approx(0.40)
-    assert floor_to_step(0.409, 0.01) == pytest.approx(0.40)
-    assert floor_to_step(0.99, 0.10) == pytest.approx(0.90)
+    assert floor_to_step(0.0385, 0.01) == pytest.approx(0.03)
+    assert floor_to_step(0.641, 0.01) == pytest.approx(0.64)
 
 
-def test_sizes_the_reference_trade():
-    """Reproduces the §8 entry example exactly."""
-    pos = make_position("96484066", direction="sell", volume=0.001798,
-                        open_price=4399.36, open_time=at(0))
+def test_stop_distance_is_worst_loss_times_buffer():
+    # 3.90 (p100 realised loss) × 1.5 = 5.85pt synthesised stop.
+    pos = make_position("1", direction="sell", open_price=4399.36, open_time=at(0))
     result = size_position(pos, XAU, CFG)
-
     assert isinstance(result, SizingDecision)
-    assert result.destination_lots == pytest.approx(0.40)
-    assert result.stop_distance_points == pytest.approx(9.28)
-    assert result.protective_stop_price == pytest.approx(4408.64)
-    assert result.risk_usd == Decimal("371.2")
-    assert result.utilisation_pct == pytest.approx(371.2 / 2500)
-    assert result.commission_estimate == Decimal("4.0")
-    assert result.mae_points_used == 4.64
+    assert result.stop_distance_points == pytest.approx(5.85)
+    assert result.protective_stop_price == pytest.approx(4405.21)  # sell: entry + 5.85
+
+
+def test_native_sizing_is_balance_proportional():
+    """Default 1× reproduces the strategy's own profile: 0.00077 lots/$1k of the
+    $50k destination = 0.0385, floored to 0.03. Risk cap does not bind here."""
+    assert native_lots(CFG) == pytest.approx(0.0385)
+    pos = make_position("1", direction="sell", open_price=4399.36, open_time=at(0))
+    result = size_position(pos, XAU, CFG)
+    assert isinstance(result, SizingDecision)
+    assert result.destination_lots == pytest.approx(0.03)  # rounded DOWN from 0.0385
+    assert result.binding_constraint == "proportional"
+    assert result.risk_usd == Decimal("17.55")             # 5.85 × 100 × 0.03
+    assert result.utilisation_pct == pytest.approx(17.55 / 2500)
+
+
+def test_risk_cap_binds_when_leveraged():
+    """At a high multiplier the proportional target exceeds the cap, so per-trade
+    risk is clamped to utilisation_target (15%) of the daily budget = 0.64 lots."""
+    cfg = CFG.model_copy(update={"size_multiplier": 20.0})
+    pos = make_position("1", direction="sell", open_price=4399.36, open_time=at(0))
+    result = size_position(pos, XAU, cfg)
+    assert isinstance(result, SizingDecision)
+    assert result.destination_lots == pytest.approx(0.64)   # capped, not 0.77
+    assert result.binding_constraint == "risk_cap"
+    assert result.risk_usd == Decimal("374.4")              # ~15% of 2500
+    assert result.utilisation_pct == pytest.approx(0.14976)
 
 
 def test_lots_always_rounded_down_never_up():
-    # Budget/risk_per_lot = 0.4040… must floor to 0.40, never 0.41.
     pos = make_position("1", direction="sell", open_price=4400.0, open_time=at(0))
     result = size_position(pos, XAU, CFG)
     assert isinstance(result, SizingDecision)
-    assert result.destination_lots == pytest.approx(0.40)
+    assert result.destination_lots == pytest.approx(0.03)  # 0.0385 → 0.03, never 0.04
 
 
 def test_stop_is_above_entry_for_sell_below_for_buy():
-    assert protective_stop_price(4400.0, "sell", 9.28, 2) == pytest.approx(4409.28)
-    assert protective_stop_price(4400.0, "buy", 9.28, 2) == pytest.approx(4390.72)
+    assert protective_stop_price(4400.0, "sell", 5.85, 2) == pytest.approx(4405.85)
+    assert protective_stop_price(4400.0, "buy", 5.85, 2) == pytest.approx(4394.15)
 
 
 def test_sized_entry_always_has_a_stop():
@@ -93,37 +108,39 @@ def test_refuses_when_spec_unavailable():
     assert result.protective_stop_price is None
 
 
-def test_refuses_when_below_min_lot():
-    # A large min_lot forces the sized 0.40 below the floor → refuse, not zero.
-    big_min = SymbolSpec(
-        symbol="XAUUSD.f", contract_size=100.0, lot_step=0.01, min_lot=1.0,
-        max_lot=100.0, digits=2, tick_value=1.0,
-    )
+def test_refuses_when_native_rounds_below_min_lot():
+    # A tiny destination equity makes the proportional size round below min_lot.
+    cfg = CFG.model_copy(update={"destination_equity": 100.0})
     pos = make_position("1", direction="sell", open_price=4400.0, open_time=at(0))
-    result = size_position(pos, big_min, CFG)
+    result = size_position(pos, XAU, cfg)
     assert isinstance(result, SizingRefused)
     assert "too small" in result.reason
-    # Stop is still computed even when refusing.
-    assert result.protective_stop_price == pytest.approx(4409.28)
+    assert result.protective_stop_price == pytest.approx(4405.85)  # stop still computed
 
 
 def test_signed_points_matches_direction():
     sell = make_position("1", direction="sell", open_price=4399.36, open_time=at(0))
-    sell = sell.with_updates(close_price=4392.34)
-    assert signed_points(sell) == pytest.approx(7.02)
-
+    assert signed_points(sell.with_updates(close_price=4392.34)) == pytest.approx(7.02)
     buy = make_position("2", direction="buy", open_price=4390.0, open_time=at(0))
-    buy = buy.with_updates(close_price=4392.34)
-    assert signed_points(buy) == pytest.approx(2.34)
+    assert signed_points(buy.with_updates(close_price=4392.34)) == pytest.approx(2.34)
 
 
-def test_estimate_close_net_of_commission():
+def test_estimate_close_is_net_of_commission_and_fee_drag():
     pos = make_position("1", direction="sell", open_price=4399.36, open_time=at(0))
     pos = pos.with_updates(close_price=4392.34, close_time=at(134))
-    est = estimate_close(pos, XAU, destination_lots=0.40, cfg=CFG)
+    est = estimate_close(pos, XAU, destination_lots=0.03, cfg=CFG)
 
     assert est.points == pytest.approx(7.02)
-    # gross = 7.02 * 100 * 0.40 = 280.80 ; commission = 0.40 * 10 = 4.00
-    assert est.gross_usd == Decimal("280.80")
-    assert est.commission_usd == Decimal("4.0")
-    assert est.net_usd == Decimal("276.80")
+    assert est.gross_usd == Decimal("21.06")        # 7.02 × 100 × 0.03
+    assert est.commission_usd == Decimal("0.30")    # 0.03 × 10
+    assert est.fee_drag_usd == Decimal("5.4756")    # 26% of gross
+    assert est.net_usd == Decimal("15.2844")        # ~¾ of gross, minus commission
+
+
+def test_no_fee_drag_on_a_losing_trade():
+    pos = make_position("1", direction="buy", open_price=4390.0, open_time=at(0))
+    pos = pos.with_updates(close_price=4385.0, close_time=at(30))
+    est = estimate_close(pos, XAU, destination_lots=0.03, cfg=CFG)
+    assert est.gross_usd == Decimal("-15.00")
+    assert est.fee_drag_usd == Decimal("0")         # no fee on a loss
+    assert est.net_usd == Decimal("-15.30")         # just commission

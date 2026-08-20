@@ -26,8 +26,15 @@ A human executes manually on a separate prop-firm account.
 - `pytest -q` must pass before any commit.
 
 ## Context
-`mae_points` in config is derived from a 2-trade sample and is a placeholder,
-not a validated risk parameter. Do not build logic that assumes it is accurate.
+Sizing is **balance-proportional with a risk cap** (revised from a 74-trade
+sample, 2 Jun–14 Aug 2026): the master trades a constant ~0.00077 lots/$1k, so
+the copy uses that rate on destination equity (`size_multiplier` = multiple of
+native, default 1×), clamped by `utilisation_target`. `stop_basis_points: 3.90`
+is the p100 realised loss (the master runs a virtual ~4pt stop) — a bound on
+exits, NOT floating MAE. `mae_points` stays `null` until true excursion is
+measured; never size off it. A leveraged `size_multiplier` is not risk-free —
+the 86.5% win / 1.79 R:R was only observed at 1×. The sample is one subscriber
+instance, not independently verified.
 
 ## Status
 Milestones M1, M2, and M3 are implemented:

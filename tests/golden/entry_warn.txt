@@ -1,7 +1,8 @@
-🟢 BUY XAUUSD — 0.40 lots
+🟢 BUY XAUUSD — 0.64 lots
 Master:  0.02 @ 4390
-Stop:    4380.72  (9.28 pts)
-Risk:    $371  (15% of daily)
-Budget:  $429 remaining today
+Stop:    4384.15  (5.85 pts)
+Risk:    $374  (15% of daily)
+Budget:  $426 remaining today
+Sizing:  17× native · risk-capped
 Age:     0.9s   ·   #96484099
 ⚠️ Governor: WARN — 83% of daily budget committed

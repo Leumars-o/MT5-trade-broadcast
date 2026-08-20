@@ -20,6 +20,7 @@ from decimal import ROUND_FLOOR, Decimal
 
 from ..config import RiskConfig
 from ..models import (
+    BindingConstraint,
     CloseEstimate,
     Direction,
     Position,
@@ -58,14 +59,24 @@ def protective_stop_price(
     return round(price, digits)
 
 
+def native_lots(cfg: RiskConfig) -> float:
+    """The strategy's own size on the destination equity (its native 1× profile),
+    before rounding or the risk cap. This is the balance-proportional target."""
+    return cfg.native_lots_per_1k * (cfg.destination_equity / 1000.0) * cfg.size_multiplier
+
+
 def size_position(
     position: Position, spec: SymbolSpec | None, cfg: RiskConfig
 ) -> SizingResult:
-    """Size a destination position for ``position`` given the symbol spec+config.
+    """Size a destination position: balance-proportional, capped by risk.
 
-    Returns a ``SizingDecision`` when copyable, else a ``SizingRefused``.
+    The master is balance-proportional (a constant lots-per-$1k), so the natural
+    copy is that same rate on the destination equity (``native_lots``). We then
+    clamp so per-trade risk never exceeds ``utilisation_target`` of the daily
+    budget. Whichever limit bounds is recorded on the decision. Returns a
+    ``SizingDecision`` when copyable, else a ``SizingRefused``.
     """
-    stop_distance = cfg.mae_points * cfg.buffer_multiplier
+    stop_distance = cfg.stop_basis_points * cfg.buffer_multiplier
 
     if spec is None:
         return SizingRefused(
@@ -73,7 +84,7 @@ def size_position(
             raw_lots=None,
             min_lot=None,
             protective_stop_price=None,
-            mae_points_used=cfg.mae_points,
+            stop_basis_points=cfg.stop_basis_points,
             buffer_multiplier=cfg.buffer_multiplier,
         )
 
@@ -81,21 +92,25 @@ def size_position(
         position.open_price, position.direction, stop_distance, spec.digits
     )
 
+    target = native_lots(cfg)
     risk_per_lot = stop_distance * spec.contract_size  # $ lost per lot if stop hit
-    budget = cfg.daily_dd_limit * cfg.utilisation_target
-    raw_lots = budget / risk_per_lot if risk_per_lot > 0 else 0.0
-    lots = floor_to_step(raw_lots, spec.lot_step)
+    cap_budget = cfg.daily_dd_limit * cfg.utilisation_target
+    cap_lots = cap_budget / risk_per_lot if risk_per_lot > 0 else 0.0
+
+    binding: BindingConstraint = "risk_cap" if cap_lots < target else "proportional"
+    raw_lots = min(target, cap_lots)
+    lots = floor_to_step(raw_lots, spec.lot_step)  # always DOWN
 
     if lots < spec.min_lot:
         return SizingRefused(
             reason=(
-                f"too small to copy safely: sized {lots:g} < min_lot "
-                f"{spec.min_lot:g} at {cfg.utilisation_target:.0%} utilisation"
+                f"too small to copy safely: native size {target:g} lots rounds "
+                f"below min_lot {spec.min_lot:g}"
             ),
             raw_lots=raw_lots,
             min_lot=spec.min_lot,
             protective_stop_price=stop_price,
-            mae_points_used=cfg.mae_points,
+            stop_basis_points=cfg.stop_basis_points,
             buffer_multiplier=cfg.buffer_multiplier,
         )
 
@@ -110,8 +125,11 @@ def size_position(
         risk_usd=risk_usd,
         utilisation_pct=utilisation_pct,
         commission_estimate=commission,
-        mae_points_used=cfg.mae_points,
+        stop_basis_points=cfg.stop_basis_points,
         buffer_multiplier=cfg.buffer_multiplier,
+        native_lots=target,
+        size_multiplier=cfg.size_multiplier,
+        binding_constraint=binding,
     )
 
 
@@ -141,10 +159,13 @@ def estimate_close(
     points = _signed_points_decimal(position)
     gross = points * _d(spec.contract_size) * _d(destination_lots)
     commission = _d(destination_lots) * _d(cfg.commission_per_lot)
+    # Prop-firm fee drag applies to gross *profit* only (no fee on a loss).
+    fee_drag = _d(cfg.fee_drag_pct) * gross if gross > 0 else Decimal("0")
     return CloseEstimate(
         points=float(points),
         gross_usd=gross,
         commission_usd=commission,
-        net_usd=gross - commission,
+        fee_drag_usd=fee_drag,
+        net_usd=gross - commission - fee_drag,
         destination_lots=destination_lots,
     )

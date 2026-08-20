@@ -14,7 +14,9 @@ def test_loads_repo_config(monkeypatch):
 
     assert isinstance(settings, Settings)
     assert settings.master.metaapi_account_id == "acct-123"
-    assert settings.risk.mae_points == 4.64
+    assert settings.risk.stop_basis_points == 3.90
+    assert settings.risk.buffer_multiplier == 1.5
+    assert settings.risk.mae_points is None  # floating MAE still unmeasured
     assert settings.risk.utilisation_target == 0.15
     assert "XAUUSD.f" in settings.symbols
     assert settings.symbols["XAUUSD.f"].destination_symbol == "XAUUSD"
@@ -31,6 +33,7 @@ def test_secret_not_exposed_in_repr(monkeypatch):
 
 def test_unset_env_placeholder_is_empty(monkeypatch):
     monkeypatch.delenv("METAAPI_ACCOUNT_ID", raising=False)
-    settings = load_settings("config/config.yaml")
+    # Point at a non-existent .env so the developer's real .env is not loaded.
+    settings = load_settings("config/config.yaml", env_path="/nonexistent/.env")
     # Missing secret resolves to empty string, not the literal ${VAR}.
     assert settings.master.metaapi_account_id == ""

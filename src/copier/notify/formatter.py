@@ -75,6 +75,19 @@ def _g(value: float) -> str:
     return f"{value:g}"
 
 
+def _sizing_note(sizing: SizingDecision) -> str:
+    """Surface how much this trade leverages the strategy's native size, and
+    which limit bound it — so the leverage is never invisible."""
+    native_1x = (
+        sizing.native_lots / sizing.size_multiplier
+        if sizing.size_multiplier
+        else sizing.native_lots
+    )
+    multiple = sizing.destination_lots / native_1x if native_1x else 0.0
+    label = "risk-capped" if sizing.binding_constraint == "risk_cap" else "proportional"
+    return f"{multiple:.0f}× native · {label}"
+
+
 # ---------------------------------------------------------------- messages
 
 
@@ -99,6 +112,7 @@ def format_entry(
         ),
         _row("Risk", f"{_money(sizing.risk_usd)}  ({pct}% of daily)"),
         _row("Budget", f"{_money(assessment.budget_remaining_usd)} remaining today"),
+        _row("Sizing", _sizing_note(sizing)),
         _row("Age", f"{fmt_age(now, position.open_time)}   ·   #{position.position_id}"),
     ]
     if assessment.verdict is not GovernorVerdict.OK:
@@ -134,9 +148,12 @@ def format_close(
     if position.close_price is None or position.close_time is None:
         raise ValueError("format_close requires a closed position")
     w = _CLOSE_WIDTH
+    fees = estimate.commission_usd + estimate.fee_drag_usd
     lines = [
         f"✅ CLOSE {position.direction.upper()} {destination_symbol}  ·  #{position.position_id}",
         _row("Master exit", f"{_g(position.close_price)}   ({estimate.points:+.2f} pts)", w),
+        _row("Gross", f"{_money(estimate.gross_usd, signed=True)}", w),
+        _row("Fees", f"-{_money(fees)} (comm + PF)", w),
         _row("Your est", f"{_money(estimate.net_usd, signed=True)} net", w),
         _row("Held", fmt_held(position.open_time, position.close_time), w),
         _row("Age", fmt_age(now, position.close_time), w),
@@ -164,7 +181,7 @@ def format_refusal(
             _row(
                 "Stop",
                 f"{_g(refusal.protective_stop_price)} "
-                f"({refusal.mae_points_used * refusal.buffer_multiplier:g} pts)",
+                f"({refusal.stop_basis_points * refusal.buffer_multiplier:g} pts)",
             )
         )
     lines.append(_row("Age", f"{fmt_age(now, position.open_time)}   ·   #{position.position_id}"))

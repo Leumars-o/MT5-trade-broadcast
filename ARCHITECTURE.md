@@ -175,27 +175,44 @@ Hard requirements:
 ### 5.3 `core/risk.py` — RiskEngine
 
 Port the logic from `mt5_risk_audit.py`. Inputs: master position, symbol spec,
-config. Outputs a `SizingDecision`:
+config. Outputs a `SizingDecision`.
+
+**Sizing model — balance-proportional with a risk cap** (revised after a
+74-trade sample, 2 Jun–14 Aug 2026, overturned the original risk-based model):
 
 ```
-destination_lots        rounded DOWN to lot_step, never up
-protective_stop_price   entry ± (mae_points × buffer_multiplier)
-risk_usd                stop distance × contract_size × lots
+native_lots             native_lots_per_1k × (destination_equity/1000) × size_multiplier
+cap_lots                (daily_dd_limit × utilisation_target) / (stop_distance × contract_size)
+destination_lots        floor_DOWN(min(native_lots, cap_lots))     # never up
+binding_constraint      "proportional" | "risk_cap"  (whichever bound)
+protective_stop_price    entry ± (stop_basis_points × buffer_multiplier)
+risk_usd                stop_distance × contract_size × lots
 utilisation_pct         risk_usd / daily_dd_limit
 commission_estimate     lots × commission_per_lot
 ```
 
+The master sizes **balance-proportionally** — a constant ~0.00077 lots per $1k
+(CoV 0.75% across 74 trades), *not* risk-based. So the faithful copy is that
+same rate on the destination equity (`size_multiplier = 1.0` = native), then
+clamped so per-trade risk never exceeds `utilisation_target` of the daily
+budget. `size_multiplier > 1` **leverages** the strategy — the measured edge
+(86.5% win, 1.79 R:R) was only observed at 1×; every lot size discussed pre-data
+was 11–60× native. The alert surfaces the native multiple so leverage is visible.
+
 Rules:
 
 - **Always round lots down.** Rounding up silently breaches the budget.
-- **Refuse to size** if `symbol_spec` is unavailable, or if computed lots fall
-  below `min_lot` — emit an INFO alert saying the trade is too small to copy
-  safely rather than sizing something arbitrary.
-- The protective stop is **mandatory output**. Every alert carries a stop
-  price. There is no code path that produces an entry alert without one.
-- MAE source is config-driven (`mae_points`), sourced from the audit script's
-  p95 output. Log which value was used in every decision so alerts stay
-  auditable when the number changes.
+- **Refuse to size** if `symbol_spec` is unavailable, or if the proportional
+  size rounds below `min_lot` — emit an INFO alert rather than sizing arbitrary.
+- The protective stop is **mandatory output**. Every alert carries a stop price.
+  There is no code path that produces an entry alert without one.
+- The stop basis is config-driven (`stop_basis_points`), derived from the
+  **realised-loss distribution** (p100 = 3.90 pts; the losses stop dead there, so
+  the master runs a virtual ~4pt stop). Log which value was used every decision.
+- **This is not MAE.** The loss distribution bounds *exits*, not floating
+  excursion. `mae_points` stays `null` until true MAE is measured; do not size
+  off it. Close estimates apply a `fee_drag_pct` (~26%, weekly PF deduction) so
+  net runs ~¾ of gross.
 
 ### 5.4 `core/governor.py` — DailyGovernor
 
@@ -269,8 +286,8 @@ CREATE TABLE alerts (
 CREATE TABLE sizing_decisions (
   alert_id        INTEGER REFERENCES alerts(id),
   destination_lots REAL, protective_stop REAL, risk_usd REAL,
-  utilisation_pct REAL, mae_points_used REAL, buffer_multiplier REAL,
-  governor_verdict TEXT
+  utilisation_pct REAL, stop_basis_points REAL, buffer_multiplier REAL,
+  size_multiplier REAL, binding_constraint TEXT, governor_verdict TEXT
 );
 
 CREATE TABLE executions (           -- manually filled in later
@@ -303,13 +320,17 @@ symbols:
     contract_size_fallback: 100
 
 risk:
-  mae_points: 4.64                    # from mt5_risk_audit.py p95 — PLACEHOLDER
-  buffer_multiplier: 2.0
+  stop_basis_points: 3.90             # p100 realised loss (74 trades), NOT MAE
+  buffer_multiplier: 1.5              # 3.90 × 1.5 = 5.85pt synthesised stop
+  native_lots_per_1k: 0.00077         # master's balance-proportional rate
+  size_multiplier: 1.0                # 1× = native; >1 leverages the strategy
   commission_per_lot: 10.0
+  fee_drag_pct: 0.26                  # weekly PF deduction ≈ 26% of gross
   daily_dd_limit: 2500
   max_dd_limit: 5000
-  utilisation_target: 0.15            # start low; see note in §10
+  utilisation_target: 0.15            # per-trade RISK CAP; see note in §10
   destination_equity: 50000
+  mae_points: null                    # floating MAE STILL UNMEASURED
 
 governor:
   soft_threshold_pct: 0.60
@@ -404,13 +425,22 @@ Only after M5 has run clean for a month should any of this inform real money.
 3. **Round lot sizes down.** Always.
 4. **Never emit an entry alert without a protective stop price.**
 5. **Idempotency before send**, not after. Insert the alert row, then send.
-6. **`mae_points: 4.64` in the config is a placeholder derived from two
-   trades.** It is not a risk model. Surface it in the daily summary so it
-   cannot be quietly forgotten.
-7. **`utilisation_target` starts at 0.15.** At 0.75, three full-buffer losses
-   exhaust the $5,000 max drawdown. Do not raise it without the audit script
-   showing a real MAE distribution across 50+ trades including losers.
+6. **`stop_basis_points: 3.90` is the p100 realised loss from a 74-trade sample
+   — a bound on exits, not floating heat. `mae_points` is still `null`.** True
+   MAE (excursion) remains unmeasured; do not size off it. Surface the stop
+   basis in the daily summary so its provenance cannot be quietly forgotten.
+7. **`size_multiplier` defaults to 1.0 (native).** That is the only regime where
+   the 86.5% win / 1.79 R:R was observed. Raising it leverages the strategy
+   (11–60× native was discussed pre-data, on no evidence the edge survives gold
+   slippage at size). `utilisation_target: 0.15` is the per-trade risk cap that
+   backstops it — do not raise either without a measured MAE distribution across
+   50+ trades including losers.
 8. **Log credentials never.** Redact at the logger level, not the call site.
+
+> **Data provenance caveat.** The 74-trade sample is one subscriber's instance
+> of a centrally-distributed signal — far better than a vendor chart, but not
+> independently verified, and it still lacks floating MAE. Treat the model as
+> evidence-based, not proven.
 
 ---
 
@@ -447,8 +477,11 @@ A human executes manually on a separate prop-firm account.
 - `pytest -q` must pass before any commit.
 
 ## Context
-`mae_points` in config is derived from a 2-trade sample and is a placeholder,
-not a validated risk parameter. Do not build logic that assumes it is accurate.
+Sizing is balance-proportional with a risk cap (`size_multiplier` = multiple of
+native; default 1×). `stop_basis_points` (3.90) is the p100 realised loss from a
+74-trade sample — a bound on exits, NOT floating MAE, which is still unmeasured
+(`mae_points: null`). Do not size off `mae_points` until it is measured, and do
+not treat a leveraged `size_multiplier` as risk-free — the edge was seen at 1×.
 ```
 
 ---

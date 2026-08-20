@@ -1,5 +1,7 @@
 ✅ CLOSE SELL XAUUSD  ·  #96484066
 Master exit: 4392.34   (+7.02 pts)
-Your est:    +$277 net
+Gross:       +$449
+Fees:        -$123 (comm + PF)
+Your est:    +$326 net
 Held:        2h 14m
 Age:         0.9s

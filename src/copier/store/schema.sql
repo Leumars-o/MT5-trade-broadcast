@@ -37,8 +37,10 @@ CREATE TABLE IF NOT EXISTS sizing_decisions (
   protective_stop  REAL,
   risk_usd         REAL,
   utilisation_pct  REAL,
-  mae_points_used  REAL,
+  stop_basis_points REAL,
   buffer_multiplier REAL,
+  size_multiplier  REAL,
+  binding_constraint TEXT,
   governor_verdict TEXT
 );
 

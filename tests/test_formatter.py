@@ -71,11 +71,14 @@ def test_entry_ok():
 
 
 def test_entry_warn_verdict():
+    # A leveraged multiplier hits the risk cap (0.64 lots) — the entry shows the
+    # native multiple + risk-capped note, and the governor warns.
+    cfg = CFG.model_copy(update={"size_multiplier": 20.0})
     pos = make_position("96484099", direction="buy", volume=0.02,
                         open_price=4390.00, open_time=at(0))
-    sizing = size_position(pos, XAU, CFG)
+    sizing = size_position(pos, XAU, cfg)
     assert isinstance(sizing, SizingDecision)
-    gov = DailyGovernor(CFG, GOV)
+    gov = DailyGovernor(cfg, GOV)
     gov.commit(Decimal("1700"), DAY)  # pre-load the day near the soft threshold
     assessment = gov.commit(sizing.risk_usd, DAY)
     now = at(0).replace(second=0, microsecond=900000)
@@ -93,7 +96,7 @@ def test_close():
     pos = make_position("96484066", direction="sell", volume=0.40,
                         open_price=4399.36, open_time=at(0))
     pos = pos.with_updates(close_price=4392.34, close_time=at(134))
-    est = estimate_close(pos, XAU, destination_lots=0.40, cfg=CFG)
+    est = estimate_close(pos, XAU, destination_lots=0.64, cfg=CFG)
     now = at(134).replace(microsecond=900000)
     _check("close", format_close(pos, est, "XAUUSD", now))
 

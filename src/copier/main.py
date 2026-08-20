@@ -92,7 +92,7 @@ class Pipeline:
         log.info(
             "sized",
             position_id=pos.position_id,
-            mae_points=result.mae_points_used,
+            stop_basis_points=result.stop_basis_points,
             buffer=result.buffer_multiplier,
         )
         if isinstance(result, SizingDecision):

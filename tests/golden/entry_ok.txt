@@ -1,6 +1,7 @@
-🔴 SELL XAUUSD — 0.40 lots
+🔴 SELL XAUUSD — 0.03 lots
 Master:  0.001798 @ 4399.36
-Stop:    4408.64  (9.28 pts)
-Risk:    $371  (15% of daily)
-Budget:  $2,129 remaining today
+Stop:    4405.21  (5.85 pts)
+Risk:    $18  (1% of daily)
+Budget:  $2,482 remaining today
+Sizing:  1× native · proportional
 Age:     1.4s   ·   #96484066

@@ -31,13 +31,23 @@ class SymbolConfig(BaseModel):
 
 
 class RiskConfig(BaseModel):
-    mae_points: float
-    buffer_multiplier: float = 2.0
+    # Stop basis: worst realised loss (p100) from the 74-trade sample, NOT an MAE.
+    stop_basis_points: float = 3.90
+    buffer_multiplier: float = 1.5
+    # Balance-proportional sizing: the master trades ~0.00077 lots per $1k of its
+    # balance. size_multiplier=1.0 reproduces that native profile on the
+    # destination equity; >1 deliberately leverages it (edge unproven above 1×).
+    native_lots_per_1k: float = 0.00077
+    size_multiplier: float = 1.0
     commission_per_lot: float = 10.0
+    # Prop-firm fee drag: ~26% of gross profit on the sample (net ≈ ¾ of gross).
+    fee_drag_pct: float = 0.26
     daily_dd_limit: float = 2500
     max_dd_limit: float = 5000
-    utilisation_target: float = 0.15
+    utilisation_target: float = 0.15    # per-trade RISK CAP, not the size driver
     destination_equity: float = 50000
+    # True floating MAE — still UNMEASURED; do not use for sizing until measured.
+    mae_points: float | None = None
 
 
 class GovernorConfig(BaseModel):

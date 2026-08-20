@@ -12,3 +12,6 @@ venv/
 *.egg-info/
 dist/
 build/
+
+# Real broker account exports (PII: name + account number). Never commit.
+reports/*.xlsx

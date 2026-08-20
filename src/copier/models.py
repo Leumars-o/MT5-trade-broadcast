@@ -99,12 +99,20 @@ class GovernorVerdict(StrEnum):
     SKIP = "skip"
 
 
+BindingConstraint = Literal["proportional", "risk_cap"]
+
+
 @dataclass(frozen=True, slots=True)
 class SizingDecision:
     """A sized entry from the risk engine. Money is ``Decimal``.
 
+    Sizing is **balance-proportional with a risk cap** (ARCHITECTURE.md §5.3):
+    the strategy's own native size (``native_lots``) scaled by ``size_multiplier``,
+    then clamped so per-trade risk never exceeds ``utilisation_target`` of the
+    daily budget. ``binding_constraint`` records which limit actually bound.
+
     Always carries a ``protective_stop_price`` — there is no code path that
-    produces an entry alert without one (ARCHITECTURE.md §5.3, §10.4).
+    produces an entry alert without one (§5.3, §10.4).
     """
 
     destination_lots: float
@@ -113,8 +121,11 @@ class SizingDecision:
     risk_usd: Decimal
     utilisation_pct: float
     commission_estimate: Decimal
-    mae_points_used: float
+    stop_basis_points: float          # worst realised loss (p100), NOT floating MAE
     buffer_multiplier: float
+    native_lots: float                # strategy's own size on destination equity
+    size_multiplier: float            # multiple of native this decision targets
+    binding_constraint: BindingConstraint
     notes: tuple[str, ...] = field(default_factory=tuple)
 
 
@@ -128,7 +139,7 @@ class SizingRefused:
     raw_lots: float | None
     min_lot: float | None
     protective_stop_price: float | None
-    mae_points_used: float
+    stop_basis_points: float
     buffer_multiplier: float
 
 
@@ -138,10 +149,15 @@ SizingResult = SizingDecision | SizingRefused
 @dataclass(frozen=True, slots=True)
 class CloseEstimate:
     """Destination-side estimate of a closed trade's outcome, using the lots the
-    engine sized at entry. Money is ``Decimal``."""
+    engine sized at entry. Money is ``Decimal``.
+
+    ``net_usd`` is after both spread/commission and the modelled prop-firm fee
+    drag (~26% of gross on the 74-trade sample) — net runs ~¾ of gross.
+    """
 
     points: float
     gross_usd: Decimal
     commission_usd: Decimal
+    fee_drag_usd: Decimal
     net_usd: Decimal
     destination_lots: float
