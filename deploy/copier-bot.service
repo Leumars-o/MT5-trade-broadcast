@@ -1,0 +1,35 @@
+# systemd unit for copier-bot (read-only MT5 observer, shadow mode).
+# Runs the Python process directly — no Docker. MetaApi's cloud holds the MT5
+# connection, so this is just one lightweight long-running process.
+#
+# Install (adjust User= and the paths to match your box):
+#   sudo cp deploy/copier-bot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now copier-bot
+#   journalctl -u copier-bot -f          # follow logs
+#
+# Secrets are read from the .env file in WorkingDirectory (the app loads it).
+
+[Unit]
+Description=copier-bot — read-only MT5 observer (Telegram shadow mode)
+After=network-online.target
+Wants=network-online.target
+# If it crash-loops 10x in 5 min, stop and require manual attention.
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=leumas
+WorkingDirectory=/home/leumas/mt5-copier-sytem
+ExecStart=/home/leumas/mt5-copier-sytem/.venv/bin/python -m copier.main --live --db /home/leumas/mt5-copier-sytem/copier.db
+Restart=always
+RestartSec=5
+# Modest hardening.
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/leumas/mt5-copier-sytem
+
+[Install]
+WantedBy=multi-user.target

@@ -74,6 +74,27 @@ docker compose logs -f
 Verify `master.server_timezone` in `config/config.yaml` against your broker
 before a live run (TMFinancials is UTC+3 in summer; see the config comment).
 
+### Without Docker (systemd)
+
+For a single process on a box you control, running directly under **systemd** is
+simpler and lighter than a container (no runtime overhead) — Docker's value is
+isolation/portability, not efficiency. A ready unit lives at
+`deploy/copier-bot.service`:
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -e ".[live]"
+cp .env.example .env         # fill in secrets, incl. HEALTHCHECK_URL
+# edit User= and the paths in deploy/copier-bot.service to match your box, then:
+sudo cp deploy/copier-bot.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now copier-bot
+journalctl -u copier-bot -f
+```
+
+`Restart=always` recovers crashes; `copier.db` in the working dir keeps state
+across restarts (no duplicate alerts). Liveness coverage is identical to the
+container path: systemd restart (crash) + internal `FEED STALE` alert (wedged
+feed) + external `HEALTHCHECK_URL` dead-man's switch (total host death).
+
 ### Telegram
 
 ```bash
