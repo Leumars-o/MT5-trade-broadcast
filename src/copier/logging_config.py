@@ -35,6 +35,13 @@ def _redact(
 
 def configure_logging(level: str = "INFO", json_output: bool = True) -> None:
     logging.basicConfig(format="%(message)s", level=getattr(logging, level.upper()))
+
+    # httpx/httpcore log the full request line at INFO, which for the Telegram
+    # API includes the bot token in the URL. Silence them so credentials never
+    # reach the logs (ARCHITECTURE.md §10.8) — redact at the logger, not the
+    # call site.
+    for noisy in ("httpx", "httpcore"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
     renderer = (
         structlog.processors.JSONRenderer()
         if json_output

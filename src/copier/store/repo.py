@@ -102,17 +102,24 @@ class Repo:
 
     # ---------------------------------------------------------------- alerts
 
-    def alert_exists(self, position_id: str, event_type: EventType) -> bool:
+    @staticmethod
+    def _event_key(event_type: EventType | str) -> str:
+        """Normalise an event type to its stored string. Plain strings are
+        allowed so callers can add a discriminator (e.g. ``modified:volume``) and
+        keep repeated modifications distinct under the unique key."""
+        return event_type.value if isinstance(event_type, EventType) else event_type
+
+    def alert_exists(self, position_id: str, event_type: EventType | str) -> bool:
         row = self._conn.execute(
             "SELECT 1 FROM alerts WHERE position_id = ? AND event_type = ?",
-            (position_id, event_type.value),
+            (position_id, self._event_key(event_type)),
         ).fetchone()
         return row is not None
 
     def insert_alert(
         self,
         position_id: str,
-        event_type: EventType,
+        event_type: EventType | str,
         payload: dict[str, object],
         detected_at: datetime,
         broker_event_time: datetime | None = None,
@@ -131,7 +138,7 @@ class Repo:
                 """,
                 (
                     position_id,
-                    event_type.value,
+                    self._event_key(event_type),
                     to_iso(broker_event_time),
                     to_iso(detected_at),
                     signal_age_ms,

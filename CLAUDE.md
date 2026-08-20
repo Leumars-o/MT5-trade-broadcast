@@ -30,14 +30,19 @@ A human executes manually on a separate prop-firm account.
 not a validated risk parameter. Do not build logic that assumes it is accurate.
 
 ## Status
-Milestones M1 and M2 are implemented:
+Milestones M1, M2, and M3 are implemented:
 - M1: config, models, SQLite store, ReplayFeed over the xlsx fixture, and the
   PositionTracker (restart / reconnect / dedupe / partial close).
 - M2: `core/risk.py` (sizing, synthesised protective stop, close estimate —
   ported from `mt5_risk_audit.py`), `core/governor.py` (daily budget verdicts),
   and `notify/formatter.py` (pure message templates, golden-file tested).
-  `main.py` runs the full ReplayFeed → tracker → risk → governor → formatter
-  pipeline to stdout.
+- M3: `notify/telegram.py` (send-only Telegram over httpx, backoff on
+  429/5xx/transport errors, token never logged), `notify/dispatcher.py`
+  (insert-before-send idempotency → restart produces no duplicate sends).
+  `main.py --send` dispatches live; `--send-test` sends one message.
 
-MetaApi (M4), Telegram (M3), anomaly + health + log-fill (M5) are NOT
+MetaApi live feed (M4) and anomaly + health + log-fill CLI (M5) are NOT
 implemented yet — see ARCHITECTURE.md §9 for the milestone order.
+
+Credential hygiene: httpx/httpcore INFO logs are silenced in
+`logging_config.py` because they would print the bot token in the request URL.
