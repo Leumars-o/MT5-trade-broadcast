@@ -20,7 +20,8 @@ imported only on the live path so the default test suite needs no broker.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
+from datetime import datetime
 from typing import Any
 
 from metaapi_cloud_sdk import MetaApi, SynchronizationListener
@@ -108,6 +109,7 @@ class _FeedListener(SynchronizationListener):
         self._feed = feed
 
     async def on_positions_synchronized(self, instance_index: str, synchronization_id: str) -> None:
+        await self._feed._connection_change(True)  # a no-op on the first sync
         await self._feed._emit(resync=True)
 
     async def on_positions_updated(
@@ -126,6 +128,7 @@ class _FeedListener(SynchronizationListener):
 
     async def on_disconnected(self, instance_index: str) -> None:
         log.warning("metaapi_disconnected", instance=instance_index)
+        await self._feed._connection_change(False)
 
 
 class MetaApiFeed:
@@ -138,6 +141,7 @@ class MetaApiFeed:
         *,
         read_only: bool = True,
         api: Any | None = None,
+        on_connection_change: Callable[[bool, datetime], Awaitable[None]] | None = None,
     ) -> None:
         if not read_only:
             # There is no code path that trades; refusing here documents intent
@@ -146,8 +150,13 @@ class MetaApiFeed:
         self._token = token
         self._account_id = account_id
         self._api = api
+        self._on_connection_change = on_connection_change
         self._conn: Any | None = None
         self._queue: asyncio.Queue[FeedUpdate | object] = asyncio.Queue()
+
+    async def _connection_change(self, connected: bool) -> None:
+        if self._on_connection_change is not None:
+            await self._on_connection_change(connected, utcnow())
 
     async def connect(self) -> None:
         log.info("metaapi_connecting", account_id=self._account_id, mode="read_only")

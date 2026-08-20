@@ -62,6 +62,18 @@ def fmt_held(open_time: datetime, close_time: datetime) -> str:
     return f"{s}s"
 
 
+def fmt_duration(seconds: float) -> str:
+    """A span of ``seconds`` as ``2h 14m`` / ``6m 05s`` / ``42s``."""
+    s = int(max(0, seconds))
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    if h:
+        return f"{h}h {m:02d}m"
+    if m:
+        return f"{m}m {sec:02d}s"
+    return f"{sec}s"
+
+
 def _money(value: Decimal, signed: bool = False) -> str:
     v = round(float(value))
     if signed:
@@ -186,3 +198,51 @@ def format_refusal(
         )
     lines.append(_row("Age", f"{fmt_age(now, position.open_time)}   ·   #{position.position_id}"))
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------- health / anomaly
+
+
+def format_health_stale(now: datetime, last_snapshot: datetime, threshold_minutes: float) -> str:
+    """CRITICAL: the feed has gone quiet — the dead-man's switch (§5.6)."""
+    gap = (now - last_snapshot).total_seconds()
+    return (
+        f"🛑 FEED STALE — no snapshot for {fmt_duration(gap)} "
+        f"(threshold {threshold_minutes:g}m)\n"
+        f"Last snapshot at {last_snapshot.isoformat()}. Process may be wedged."
+    )
+
+
+def format_health_disconnect(now: datetime) -> str:
+    return f"🔌 DISCONNECTED from broker feed at {now.isoformat()}."
+
+
+def format_health_reconnect(downtime_seconds: float, now: datetime) -> str:
+    return f"🔗 RECONNECTED to broker feed · downtime {fmt_duration(downtime_seconds)}."
+
+
+def format_daily_summary(
+    local_date: str,
+    signal_count: int,
+    max_signal_age_ms: int,
+    provenance: str,
+    now: datetime,
+    last_snapshot: datetime | None,
+) -> str:
+    """The daily 'still alive' summary. Surfaces signal throughput, the worst
+    observed signal age, and the risk-parameter provenance so the stop basis and
+    the unmeasured MAE cannot be quietly forgotten (§10.6)."""
+    feed = (
+        f"{fmt_duration((now - last_snapshot).total_seconds())} ago"
+        if last_snapshot is not None
+        else "never"
+    )
+    return "\n".join(
+        [
+            f"🩺 copier-bot alive · {local_date}",
+            _row("Signals", str(signal_count)),
+            _row("Max age", f"{max_signal_age_ms / 1000:.1f}s"),
+            _row("Feed", f"last snapshot {feed}"),
+            _row("Risk", provenance),
+        ]
+    )

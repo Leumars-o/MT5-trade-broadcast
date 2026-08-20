@@ -22,6 +22,7 @@ from .core.risk import estimate_close, size_position
 from .core.tracker import PositionTracker
 from .feed.base import FeedUpdate
 from .feed.replay_feed import ReplayFeed
+from .health import HealthMonitor
 from .logging_config import configure_logging, get_logger
 from .models import EventType, Position, PositionEvent, SizingDecision
 from .notify import formatter
@@ -130,14 +131,19 @@ async def consume_feed(
     *,
     dispatcher: AlertDispatcher | None = None,
     repo: Repo | None = None,
+    monitor: HealthMonitor | None = None,
 ) -> int:
     """Drive one feed through the pipeline. Honours resync, persists position
-    state for restart recovery, prints, and optionally dispatches."""
+    state for restart recovery, prints, and optionally dispatches. When a
+    ``monitor`` is supplied, each snapshot beats the heartbeat and each alert is
+    counted for the daily summary."""
     pipeline = Pipeline(feed, settings)
     total = 0
     async for update in feed.stream():
         assert isinstance(update, FeedUpdate)
         now = update.server_time or utcnow()
+        if monitor is not None:
+            monitor.record_snapshot(now)
         events = tracker.diff(update.positions, now=now, resync=update.resync)
         for ev in events:
             if repo is not None:
@@ -147,6 +153,9 @@ async def consume_feed(
                 continue
             print(message)
             total += 1
+            if monitor is not None:
+                broker_time = _broker_time(ev)
+                monitor.record_signal(int(max(0.0, (now - broker_time).total_seconds() * 1000)))
             if dispatcher is not None:
                 result = await dispatcher.dispatch(
                     position_id=ev.position_id,
@@ -179,6 +188,14 @@ async def run_replay(
     return total
 
 
+def _provenance(settings: Settings) -> str:
+    """One-line risk-parameter provenance for the daily summary (§10.6)."""
+    return (
+        f"{settings.risk.stop_basis_points:g}pt stop basis (p100 realised loss) "
+        "· MAE unmeasured"
+    )
+
+
 async def run_live(settings: Settings, token: str, db: str) -> None:
     # Imported here so the SDK is only required on the live path.
     from .feed.metaapi_feed import MetaApiFeed
@@ -188,16 +205,30 @@ async def run_live(settings: Settings, token: str, db: str) -> None:
     tracker = PositionTracker(process_start_time=utcnow())
     tracker.prime(repo.load_open_positions())  # restart safety
 
-    feed = MetaApiFeed(
-        token, settings.master.metaapi_account_id, read_only=settings.master.read_only
-    )
     notifier = _build_notifier(settings)
     log.warning("live_shadow_mode", note="read-only observer; alerts only, no orders")
-    await feed.connect()
     async with notifier:
         dispatcher = AlertDispatcher(repo, notifier)
-        await consume_feed(feed, settings, tracker, dispatcher=dispatcher, repo=repo)
-    await feed.close()
+        monitor = HealthMonitor(
+            repo, dispatcher, settings.health,
+            display_tz=settings.display_timezone, provenance=_provenance(settings),
+        )
+        feed = MetaApiFeed(
+            token, settings.master.metaapi_account_id,
+            read_only=settings.master.read_only,
+            on_connection_change=monitor.note_connection,
+        )
+        await feed.connect()
+        stop = asyncio.Event()
+        health_task = asyncio.create_task(monitor.run(stop))
+        try:
+            await consume_feed(
+                feed, settings, tracker, dispatcher=dispatcher, repo=repo, monitor=monitor
+            )
+        finally:
+            stop.set()
+            await health_task
+            await feed.close()
     repo.close()
 
 

@@ -53,8 +53,12 @@ Milestones M1, M2, and M3 are implemented:
   connects with investor credentials and dispatches in shadow mode. The SDK is
   an optional dep (`pip install -e ".[live]"`), imported only on the live path.
 
-Anomaly + health + `log-fill` CLI (M5) are NOT implemented yet — see
-ARCHITECTURE.md §9 for the milestone order.
+- M5 (in progress): `health.py` — HealthMonitor (heartbeat, stale-feed
+  dead-man's switch, disconnect/reconnect alerts, daily summary surfacing the
+  stop-basis provenance). Wired as a parallel task in `--live`. Anomaly
+  tripwires and the `log-fill` CLI are still TODO.
+
+See ARCHITECTURE.md §9 for the milestone order.
 
 Read-only is enforced by (1) investor password at the broker and (2) no
 trading-method references in `src/` (guarded by `test_no_order_placement`).
