@@ -15,3 +15,6 @@ build/
 
 # Real broker account data (exports contain PII; keep all of it out of git).
 reports/
+
+# Alternative venv names
+.broadcast-env/
