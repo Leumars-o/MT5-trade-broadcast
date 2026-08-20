@@ -62,6 +62,15 @@ Milestones M1, M2, and M3 are implemented:
 All of v1 (M1–M5) is implemented. Remaining per ARCHITECTURE.md §13 is v1.5
 (live destination equity, slippage report, re-derived MAE, multi-symbol).
 
+## Deployment
+`Dockerfile` + `docker-compose.yml` run `--live` persistently (state on the
+`copier-data` volume, `restart: unless-stopped`). No Windows VPS — MetaApi's
+cloud holds the MT5 connection, so this is a small Linux Python process. The
+in-process HealthMonitor cannot alert on total host death, so set
+`HEALTHCHECK_URL` (`.env`) to an external dead-man's switch the bot pings each
+heartbeat. `docker/healthcheck.py` is the container HEALTHCHECK (heartbeat
+freshness in the DB).
+
 Read-only is enforced by (1) investor password at the broker and (2) no
 trading-method references in `src/` (guarded by `test_no_order_placement`).
 `metaapi_feed.py` must never call a trade method — the streaming connection

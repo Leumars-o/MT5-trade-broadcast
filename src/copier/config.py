@@ -64,6 +64,10 @@ class HealthConfig(BaseModel):
     stale_feed_minutes: float = 5
     daily_summary_time: str = "22:00"
     max_expected_hold_minutes: float = 240
+    # External dead-man's switch (e.g. healthchecks.io). The bot pings this URL
+    # every heartbeat; the external service alerts if the pings stop — the only
+    # thing that catches total process/host death. Empty = disabled.
+    heartbeat_ping_url: str = ""
 
 
 class Settings(BaseModel):

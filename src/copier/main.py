@@ -14,9 +14,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+import httpx
 
 from .config import Settings, load_settings
 from .core.anomaly import AnomalyDetector
@@ -237,6 +240,15 @@ def _provenance(settings: Settings) -> str:
     )
 
 
+def _make_heartbeat_ping(url: str, client: httpx.AsyncClient) -> Callable[[], Awaitable[None]]:
+    """A pinger for an external dead-man's switch. Errors propagate to the
+    monitor, which swallows them — a blip must not stop feed monitoring."""
+    async def ping() -> None:
+        resp = await client.get(url, timeout=5.0)
+        resp.raise_for_status()
+    return ping
+
+
 async def run_live(settings: Settings, token: str, db: str) -> None:
     # Imported here so the SDK is only required on the live path.
     from .feed.metaapi_feed import MetaApiFeed
@@ -247,12 +259,22 @@ async def run_live(settings: Settings, token: str, db: str) -> None:
     tracker.prime(repo.load_open_positions())  # restart safety
 
     notifier = _build_notifier(settings)
-    log.warning("live_shadow_mode", note="read-only observer; alerts only, no orders")
+    ping_url = settings.health.heartbeat_ping_url
+    ping_client = httpx.AsyncClient() if ping_url else None
+    heartbeat_ping = (
+        _make_heartbeat_ping(ping_url, ping_client) if ping_client is not None else None
+    )
+    log.warning(
+        "live_shadow_mode",
+        note="read-only observer; alerts only, no orders",
+        dead_mans_switch=bool(ping_url),
+    )
     async with notifier:
         dispatcher = AlertDispatcher(repo, notifier)
         monitor = HealthMonitor(
             repo, dispatcher, settings.health,
             display_tz=settings.display_timezone, provenance=_provenance(settings),
+            heartbeat_ping=heartbeat_ping,
         )
         detector = AnomalyDetector(
             max_hold_minutes=settings.health.max_expected_hold_minutes
@@ -274,6 +296,8 @@ async def run_live(settings: Settings, token: str, db: str) -> None:
             stop.set()
             await health_task
             await feed.close()
+            if ping_client is not None:
+                await ping_client.aclose()
     repo.close()
 
 

@@ -46,6 +46,34 @@ python -m copier.main --live
 The account must be provisioned with the **investor password** and show
 DEPLOYED/CONNECTED in the MetaApi dashboard first.
 
+## Deploy (persistent container)
+
+For a 24/7 shadow soak you need an always-on host. Because MetaApi's cloud holds
+the MT5 connection, this is just a **small Linux box** (1 vCPU / 512MB is plenty)
+— no Windows/MetaTrader VPS required.
+
+```bash
+git clone <repo> && cd mt5-copier-sytem
+cp .env.example .env          # fill in METAAPI_*, TELEGRAM_*, HEALTHCHECK_URL
+docker compose up -d --build
+docker compose logs -f
+```
+
+- **State survives restarts**: `copier.db` lives on the `copier-data` volume, so
+  a crash/restart recovers open positions and never re-sends an alert
+  (insert-before-send dedupe). `restart: unless-stopped` auto-recovers crashes.
+- **Container healthcheck**: the image fails its `HEALTHCHECK` if the heartbeat in
+  the DB is older than 120s (`docker compose ps` shows healthy/unhealthy).
+- **External dead-man's switch** (`HEALTHCHECK_URL`): the bot pings this URL every
+  heartbeat. The internal HealthMonitor cannot warn you if the whole process/host
+  dies (it dies too) — so point `HEALTHCHECK_URL` at a
+  [healthchecks.io](https://healthchecks.io)-style check with your expected
+  activity window, and *that* service pages you if the pings stop. This is the
+  only thing that catches total host death.
+
+Verify `master.server_timezone` in `config/config.yaml` against your broker
+before a live run (TMFinancials is UTC+3 in summer; see the config comment).
+
 ### Telegram
 
 ```bash

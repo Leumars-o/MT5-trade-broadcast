@@ -47,5 +47,6 @@ health:
   stale_feed_minutes: 5
   daily_summary_time: "22:00"
   max_expected_hold_minutes: 240
+  heartbeat_ping_url: ${HEALTHCHECK_URL}   # external dead-man's switch; blank = off
 
 display_timezone: "Africa/Lagos"

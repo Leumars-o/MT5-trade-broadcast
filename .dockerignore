@@ -1,0 +1,17 @@
+# Keep the image small and free of secrets / private data.
+.git/
+.venv/
+venv/
+tests/
+reports/            # real broker exports (PII) — never in the image
+.env                # secrets come from the runtime environment, not the image
+*.db
+*.sqlite*
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/

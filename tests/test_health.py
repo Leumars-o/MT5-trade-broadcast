@@ -98,3 +98,39 @@ async def test_summary_resets_counters(tmp_path):
     await monitor.tick(at(780))       # summary day 1
     assert monitor._signals == 0
     assert monitor._max_age_ms == 0
+
+
+async def test_heartbeat_ping_called_each_tick(tmp_path):
+    repo = Repo(tmp_path / "copier.db")
+    repo.initialize()
+    pings = []
+
+    async def ping() -> None:
+        pings.append(1)
+
+    monitor = HealthMonitor(
+        repo, AlertDispatcher(repo, FakeNotifier()), CFG,
+        display_tz="UTC", provenance=PROV, heartbeat_ping=ping,
+    )
+    monitor.record_snapshot(at(0))
+    await monitor.tick(at(1))
+    await monitor.tick(at(2))
+    assert pings == [1, 1]
+
+
+async def test_failed_heartbeat_ping_does_not_break_monitoring(tmp_path):
+    repo = Repo(tmp_path / "copier.db")
+    repo.initialize()
+    notifier = FakeNotifier()
+
+    async def ping() -> None:
+        raise RuntimeError("network down")
+
+    monitor = HealthMonitor(
+        repo, AlertDispatcher(repo, notifier), CFG,
+        display_tz="UTC", provenance=PROV, heartbeat_ping=ping,
+    )
+    monitor.record_snapshot(at(0))
+    await monitor.tick(at(6))  # ping raises, but the stale check must still fire
+    assert len(notifier.sent) == 1
+    assert "FEED STALE" in notifier.sent[0]

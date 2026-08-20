@@ -12,14 +12,17 @@ given stall / reconnect / daily summary is sent once).
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 
 from .config import HealthConfig
+from .logging_config import get_logger
 from .notify import formatter
 from .notify.dispatcher import AlertDispatcher
 from .store.repo import Repo
 from .timeutil import to_display, utcnow
+
+log = get_logger("copier.health")
 
 _HEALTH_ID = "__health__"
 
@@ -34,6 +37,7 @@ class HealthMonitor:
         display_tz: str,
         provenance: str,
         heartbeat_interval: float = 30.0,
+        heartbeat_ping: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._repo = repo
         self._dispatcher = dispatcher
@@ -41,6 +45,7 @@ class HealthMonitor:
         self._display_tz = display_tz
         self._provenance = provenance
         self._heartbeat_interval = heartbeat_interval
+        self._heartbeat_ping = heartbeat_ping
 
         self._last_snapshot: datetime | None = None
         self._connected = True
@@ -88,9 +93,17 @@ class HealthMonitor:
     # ------------------------------------------------------------ periodic tick
 
     async def tick(self, now: datetime) -> None:
-        """One monitoring beat: persist the heartbeat, check staleness, and send
-        the daily summary when due."""
+        """One monitoring beat: persist the heartbeat, ping the external switch,
+        check staleness, and send the daily summary when due."""
         self._repo.record_heartbeat(now=now, last_snapshot=self._last_snapshot)
+
+        # External dead-man's switch. A failed ping must never break monitoring
+        # (a transient network blip is not a reason to stop watching the feed).
+        if self._heartbeat_ping is not None:
+            try:
+                await self._heartbeat_ping()
+            except Exception as exc:  # noqa: BLE001 - deliberately swallow all
+                log.warning("heartbeat_ping_failed", error=type(exc).__name__)
 
         if self._connected and self._last_snapshot is not None:
             gap = (now - self._last_snapshot).total_seconds()

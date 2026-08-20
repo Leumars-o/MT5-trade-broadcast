@@ -1,0 +1,26 @@
+# copier-bot — persistent read-only shadow-mode deployment.
+#
+#   cp .env.example .env   # fill in METAAPI_*, TELEGRAM_*, HEALTHCHECK_URL
+#   docker compose up -d --build
+#   docker compose logs -f
+#
+# Secrets are injected from .env at runtime (env_file) — they are NOT baked into
+# the image. State (copier.db) lives on a named volume so restarts don't
+# duplicate alerts and recover open positions.
+
+services:
+  copier:
+    build: .
+    image: copier-bot:latest
+    container_name: copier-bot
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - copier-data:/data
+    command: ["python", "-m", "copier.main", "--live", "--db", "/data/copier.db"]
+    # Healthcheck is defined in the Dockerfile (heartbeat freshness in the DB).
+    # `docker compose ps` shows healthy/unhealthy; the external HEALTHCHECK_URL
+    # dead-man's switch is what actually pages you if the whole host dies.
+
+volumes:
+  copier-data:
