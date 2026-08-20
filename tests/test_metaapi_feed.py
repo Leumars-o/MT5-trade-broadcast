@@ -100,16 +100,18 @@ async def _drain(feed: MetaApiFeed) -> list[FeedUpdate]:
     return out
 
 
-async def test_positions_synchronized_emits_resync_snapshot():
+async def test_first_sync_is_a_real_diff_later_syncs_are_resync():
+    """Cold start must surface already-open positions (PRE_EXISTING, §5.2), so the
+    first sync is resync=False; every subsequent sync is a reconnect resync."""
     feed = MetaApiFeed("token", "acct")
     feed._conn = _FakeConn([_POS])
     listener = _FeedListener(feed)
 
-    await listener.on_positions_synchronized("0", "sync-1")
+    await listener.on_positions_synchronized("0", "sync-1")  # cold start
+    await listener.on_positions_synchronized("0", "sync-2")  # reconnect
 
     updates = await _drain(feed)
-    assert len(updates) == 1
-    assert updates[0].resync is True
+    assert [u.resync for u in updates] == [False, True]
     assert [p.position_id for p in updates[0].positions] == ["96484066"]
 
 

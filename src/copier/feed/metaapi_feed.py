@@ -110,7 +110,13 @@ class _FeedListener(SynchronizationListener):
 
     async def on_positions_synchronized(self, instance_index: str, synchronization_id: str) -> None:
         await self._feed._connection_change(True)  # a no-op on the first sync
-        await self._feed._emit(resync=True)
+        # The FIRST sync is a cold start, not a reconnect: emit it as a real diff
+        # so positions already open before startup surface as PRE_EXISTING (§5.2).
+        # Known state is empty, so there is nothing to phantom-close. Every LATER
+        # sync is a reconnect and must be a silent resync.
+        first_sync = not self._feed._synced_once
+        self._feed._synced_once = True
+        await self._feed._emit(resync=not first_sync)
 
     async def on_positions_updated(
         self, instance_index: str, positions: Any, removed_position_ids: Any
@@ -152,6 +158,7 @@ class MetaApiFeed:
         self._api = api
         self._on_connection_change = on_connection_change
         self._conn: Any | None = None
+        self._synced_once = False  # first sync = cold start; later syncs = reconnect
         self._queue: asyncio.Queue[FeedUpdate | object] = asyncio.Queue()
 
     async def _connection_change(self, connected: bool) -> None:
