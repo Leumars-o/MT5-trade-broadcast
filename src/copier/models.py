@@ -101,14 +101,47 @@ class GovernorVerdict(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class SizingDecision:
-    """Output of the risk engine (implemented in M2). Money is ``Decimal``."""
+    """A sized entry from the risk engine. Money is ``Decimal``.
+
+    Always carries a ``protective_stop_price`` — there is no code path that
+    produces an entry alert without one (ARCHITECTURE.md §5.3, §10.4).
+    """
 
     destination_lots: float
     protective_stop_price: float
+    stop_distance_points: float
     risk_usd: Decimal
     utilisation_pct: float
     commission_estimate: Decimal
     mae_points_used: float
     buffer_multiplier: float
-    governor_verdict: GovernorVerdict = GovernorVerdict.OK
     notes: tuple[str, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True, slots=True)
+class SizingRefused:
+    """The risk engine declined to size a trade — a too-small position or a
+    missing symbol spec. Surfaced as a quieter INFO alert, never a silent zero
+    (ARCHITECTURE.md §5.3). A protective stop is still computed when possible."""
+
+    reason: str
+    raw_lots: float | None
+    min_lot: float | None
+    protective_stop_price: float | None
+    mae_points_used: float
+    buffer_multiplier: float
+
+
+SizingResult = SizingDecision | SizingRefused
+
+
+@dataclass(frozen=True, slots=True)
+class CloseEstimate:
+    """Destination-side estimate of a closed trade's outcome, using the lots the
+    engine sized at entry. Money is ``Decimal``."""
+
+    points: float
+    gross_usd: Decimal
+    commission_usd: Decimal
+    net_usd: Decimal
+    destination_lots: float

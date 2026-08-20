@@ -30,7 +30,14 @@ A human executes manually on a separate prop-firm account.
 not a validated risk parameter. Do not build logic that assumes it is accurate.
 
 ## Status
-Milestone M1 is implemented: config, models, SQLite store, ReplayFeed over the
-xlsx fixture, and the PositionTracker (restart / reconnect / dedupe / partial
-close). MetaApi, Telegram, risk sizing, governor, anomaly, and health are NOT
+Milestones M1 and M2 are implemented:
+- M1: config, models, SQLite store, ReplayFeed over the xlsx fixture, and the
+  PositionTracker (restart / reconnect / dedupe / partial close).
+- M2: `core/risk.py` (sizing, synthesised protective stop, close estimate —
+  ported from `mt5_risk_audit.py`), `core/governor.py` (daily budget verdicts),
+  and `notify/formatter.py` (pure message templates, golden-file tested).
+  `main.py` runs the full ReplayFeed → tracker → risk → governor → formatter
+  pipeline to stdout.
+
+MetaApi (M4), Telegram (M3), anomaly + health + log-fill (M5) are NOT
 implemented yet — see ARCHITECTURE.md §9 for the milestone order.
