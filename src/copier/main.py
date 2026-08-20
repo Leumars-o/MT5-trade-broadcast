@@ -1,9 +1,12 @@
-"""M3 entry point: ReplayFeed → tracker → risk → governor → formatter → sink.
+"""Entry point: feed → tracker → risk → governor → formatter → sink.
 
-Default run prints alerts to stdout (no network). With ``--send`` the alerts are
-dispatched to Telegram idempotently (insert-before-send dedupe via SQLite), so a
-restart mid-run produces no duplicate messages. ``--send-test`` sends a single
-confirmation message and exits.
+Three run modes:
+  * default   — replay the xlsx fixture, print alerts to stdout (no network)
+  * --send    — replay + dispatch to Telegram idempotently
+  * --live    — connect the MetaApi read-only feed and dispatch (shadow mode)
+  * --send-test — send one Telegram message and exit
+
+The pipeline is identical across modes; only the feed and the sink differ.
 """
 
 from __future__ import annotations
@@ -11,18 +14,20 @@ from __future__ import annotations
 import argparse
 import asyncio
 from pathlib import Path
+from typing import Any
 
 from .config import Settings, load_settings
 from .core.governor import DailyGovernor
 from .core.risk import estimate_close, size_position
 from .core.tracker import PositionTracker
+from .feed.base import FeedUpdate
 from .feed.replay_feed import ReplayFeed
 from .logging_config import configure_logging, get_logger
 from .models import EventType, Position, PositionEvent, SizingDecision
 from .notify import formatter
 from .notify.dispatcher import AlertDispatcher
 from .notify.telegram import TelegramNotifier
-from .store.repo import Repo
+from .store.repo import STATE_CLOSED, STATE_OPEN, STATE_PRE_EXISTING, Repo
 from .timeutil import utcnow
 
 log = get_logger("copier.main")
@@ -44,16 +49,24 @@ def _event_key(event: PositionEvent) -> str:
     return event.event_type.value
 
 
-def _broker_time(event: PositionEvent) -> object:
+def _broker_time(event: PositionEvent) -> Any:
     if event.event_type is EventType.CLOSED and event.position.close_time is not None:
         return event.position.close_time
     return event.position.open_time
 
 
-class ReplayPipeline:
-    """Turns tracker events into formatted alert text."""
+_STATE_FOR_EVENT = {
+    EventType.OPENED: STATE_OPEN,
+    EventType.MODIFIED: STATE_OPEN,
+    EventType.PRE_EXISTING: STATE_PRE_EXISTING,
+    EventType.CLOSED: STATE_CLOSED,
+}
 
-    def __init__(self, feed: ReplayFeed, settings: Settings) -> None:
+
+class Pipeline:
+    """Turns tracker events into formatted alert text (feed-agnostic)."""
+
+    def __init__(self, feed: Any, settings: Settings) -> None:
         self._feed = feed
         self._settings = settings
         self._governor = DailyGovernor(settings.risk, settings.governor)
@@ -93,7 +106,9 @@ class ReplayPipeline:
         if lots is None:
             return f"✅ CLOSE {pos.direction.upper()} {dest}  ·  #{pos.position_id} (not sized)"
         if pos.close_time is None:
-            return None
+            # Live feed knows the position closed but not its exit price/time
+            # (that lives in the deal stream — a later enrichment). Report plainly.
+            return f"✅ CLOSE {pos.direction.upper()} {dest}  ·  #{pos.position_id}"
         spec = await self._feed.symbol_spec(pos.symbol)
         estimate = estimate_close(pos, spec, lots, self._settings.risk)
         return formatter.format_close(pos, estimate, dest, pos.close_time)
@@ -108,24 +123,25 @@ def _describe_modified(event: PositionEvent) -> str:
     return f"✏️ MODIFY {p.direction.upper()} {p.symbol}  ·  #{p.position_id}  [{detail}]"
 
 
-async def run_replay(
-    report: Path,
+async def consume_feed(
+    feed: Any,
     settings: Settings,
-    server_tz: str | None,
+    tracker: PositionTracker,
+    *,
     dispatcher: AlertDispatcher | None = None,
+    repo: Repo | None = None,
 ) -> int:
-    """Replay a report through the pipeline, printing each alert. When a
-    dispatcher is supplied, alerts are also sent idempotently."""
-    feed = ReplayFeed(report, server_tz=server_tz)
-    await feed.connect()
-    process_start = feed.snapshots[0][0] if feed.snapshots else utcnow()
-    tracker = PositionTracker(process_start_time=process_start)
-    pipeline = ReplayPipeline(feed, settings)
-
+    """Drive one feed through the pipeline. Honours resync, persists position
+    state for restart recovery, prints, and optionally dispatches."""
+    pipeline = Pipeline(feed, settings)
     total = 0
     async for update in feed.stream():
+        assert isinstance(update, FeedUpdate)
         now = update.server_time or utcnow()
-        for ev in tracker.diff(update.positions, now=now):
+        events = tracker.diff(update.positions, now=now, resync=update.resync)
+        for ev in events:
+            if repo is not None:
+                repo.upsert_position(ev.position, _STATE_FOR_EVENT[ev.event_type], now=now)
             message = await pipeline.handle(ev)
             if not message:
                 continue
@@ -137,30 +153,66 @@ async def run_replay(
                     event_type=_event_key(ev),
                     message=message,
                     detected_at=now,
-                    broker_event_time=_broker_time(ev),  # type: ignore[arg-type]
+                    broker_event_time=_broker_time(ev),
                     now=now,
                 )
                 print(f"   → {result.value}")
             print()
-    print(f"{total} alert(s) from {len(feed.snapshots)} snapshot(s).")
     return total
+
+
+# ---------------------------------------------------------------- run modes
+
+
+async def run_replay(
+    report: Path, settings: Settings, server_tz: str | None,
+    dispatcher: AlertDispatcher | None = None, repo: Repo | None = None,
+) -> int:
+    feed = ReplayFeed(report, server_tz=server_tz)
+    await feed.connect()
+    process_start = feed.snapshots[0][0] if feed.snapshots else utcnow()
+    tracker = PositionTracker(process_start_time=process_start)
+    if repo is not None:
+        tracker.prime(repo.load_open_positions())
+    total = await consume_feed(feed, settings, tracker, dispatcher=dispatcher, repo=repo)
+    print(f"{total} alert(s).")
+    return total
+
+
+async def run_live(settings: Settings, token: str, db: str) -> None:
+    # Imported here so the SDK is only required on the live path.
+    from .feed.metaapi_feed import MetaApiFeed
+
+    repo = Repo(db)
+    repo.initialize()
+    tracker = PositionTracker(process_start_time=utcnow())
+    tracker.prime(repo.load_open_positions())  # restart safety
+
+    feed = MetaApiFeed(
+        token, settings.master.metaapi_account_id, read_only=settings.master.read_only
+    )
+    notifier = _build_notifier(settings)
+    log.warning("live_shadow_mode", note="read-only observer; alerts only, no orders")
+    await feed.connect()
+    async with notifier:
+        dispatcher = AlertDispatcher(repo, notifier)
+        await consume_feed(feed, settings, tracker, dispatcher=dispatcher, repo=repo)
+    await feed.close()
+    repo.close()
 
 
 def _build_notifier(settings: Settings) -> TelegramNotifier:
     token = settings.telegram.bot_token.get_secret_value()
     chat_id = settings.telegram.chat_id
     if not token or not chat_id:
-        raise SystemExit(
-            "TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be set in .env to send."
-        )
+        raise SystemExit("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be set in .env to send.")
     return TelegramNotifier(settings.telegram.bot_token, chat_id)
 
 
 async def send_test(settings: Settings) -> None:
-    """Send a single confirmation message to verify the live Telegram wiring."""
     notifier = _build_notifier(settings)
     async with notifier:
-        ok = await notifier.send("✅ copier-bot: M3 Telegram sink is live (test message).")
+        ok = await notifier.send("✅ copier-bot: Telegram sink is live (test message).")
     print("sent" if ok else "FAILED — check token/chat_id (nothing is logged)")
 
 
@@ -169,23 +221,18 @@ async def _run_send(report: Path, settings: Settings, server_tz: str | None, db:
     repo.initialize()
     notifier = _build_notifier(settings)
     async with notifier:
-        dispatcher = AlertDispatcher(repo, notifier)
-        await run_replay(report, settings, server_tz, dispatcher)
+        await run_replay(report, settings, server_tz, AlertDispatcher(repo, notifier), repo)
     repo.close()
 
 
 def cli() -> None:
-    ap = argparse.ArgumentParser(description="copier-bot M3 replay runner")
-    ap.add_argument(
-        "report",
-        nargs="?",
-        default="tests/fixtures/ReportHistory-51104542.xlsx",
-        help="MT5 .xlsx history report to replay",
-    )
+    ap = argparse.ArgumentParser(description="copier-bot runner")
+    ap.add_argument("report", nargs="?", default="tests/fixtures/ReportHistory-51104542.xlsx")
     ap.add_argument("--config", default="config/config.yaml")
     ap.add_argument("--server-tz", default=None)
     ap.add_argument("--db", default="copier.db", help="SQLite path for dedupe/state")
-    ap.add_argument("--send", action="store_true", help="dispatch alerts to Telegram")
+    ap.add_argument("--send", action="store_true", help="replay + dispatch to Telegram")
+    ap.add_argument("--live", action="store_true", help="connect the MetaApi read-only live feed")
     ap.add_argument("--send-test", action="store_true", help="send one test message and exit")
     ap.add_argument("--log-level", default="INFO")
     args = ap.parse_args()
@@ -195,6 +242,13 @@ def cli() -> None:
 
     if args.send_test:
         asyncio.run(send_test(settings))
+    elif args.live:
+        import os
+
+        token = os.environ.get("METAAPI_TOKEN", "")
+        if not token or not settings.master.metaapi_account_id:
+            raise SystemExit("METAAPI_TOKEN and METAAPI_ACCOUNT_ID must be set in .env for --live.")
+        asyncio.run(run_live(settings, token, args.db))
     elif args.send:
         asyncio.run(_run_send(Path(args.report), settings, args.server_tz, args.db))
     else:

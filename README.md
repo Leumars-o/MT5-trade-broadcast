@@ -19,10 +19,21 @@ Implemented so far (ARCHITECTURE.md §9):
 - `notify/formatter.py` — pure message templates, golden-file tested (M2)
 - `notify/telegram.py` — send-only Telegram sink, backoff + token redaction (M3)
 - `notify/dispatcher.py` — insert-before-send dedupe; no dupes on restart (M3)
-- `main.py` — ReplayFeed → tracker → risk → governor → formatter → (stdout|Telegram)
+- `feed/metaapi_feed.py` — live READ-ONLY MetaApi streaming feed (M4)
+- `main.py` — feed → tracker → risk → governor → formatter → (stdout|Telegram)
 
-Not yet implemented: MetaApi live feed (M4), anomaly tripwires + health monitor
-+ `log-fill` CLI (M5).
+Not yet implemented: anomaly tripwires + health monitor + `log-fill` CLI (M5).
+
+### Live (MetaApi, read-only shadow mode)
+
+```bash
+pip install -e ".[live]"        # optional live SDK
+# .env: METAAPI_TOKEN + METAAPI_ACCOUNT_ID (investor/read-only credentials)
+python -m copier.main --live
+```
+
+The account must be provisioned with the **investor password** and show
+DEPLOYED/CONNECTED in the MetaApi dashboard first.
 
 ### Telegram
 

@@ -41,8 +41,20 @@ Milestones M1, M2, and M3 are implemented:
   (insert-before-send idempotency → restart produces no duplicate sends).
   `main.py --send` dispatches live; `--send-test` sends one message.
 
-MetaApi live feed (M4) and anomaly + health + log-fill CLI (M5) are NOT
-implemented yet — see ARCHITECTURE.md §9 for the milestone order.
+- M4: `feed/metaapi_feed.py` — live READ-ONLY MetaApi streaming feed behind the
+  same `PositionFeed`/`FeedUpdate` contract as ReplayFeed. `main.py --live`
+  connects with investor credentials and dispatches in shadow mode. The SDK is
+  an optional dep (`pip install -e ".[live]"`), imported only on the live path.
+
+Anomaly + health + `log-fill` CLI (M5) are NOT implemented yet — see
+ARCHITECTURE.md §9 for the milestone order.
+
+Read-only is enforced by (1) investor password at the broker and (2) no
+trading-method references in `src/` (guarded by `test_no_order_placement`).
+`metaapi_feed.py` must never call a trade method — the streaming connection
+object exposes them, but we only touch connect/synchronise/read/close.
 
 Credential hygiene: httpx/httpcore INFO logs are silenced in
 `logging_config.py` because they would print the bot token in the request URL.
+Live CLOSED alerts currently lack the exact exit price (it lives in MetaApi's
+deal stream, not `terminal_state.positions`) — a later enrichment.

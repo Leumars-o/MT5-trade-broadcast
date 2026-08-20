@@ -56,5 +56,12 @@ packages = ["copier"]
 # Third-party libs without bundled type stubs. Installing pandas-stubs /
 # types-PyYAML is optional; ignoring keeps `mypy src` clean without them.
 [[tool.mypy.overrides]]
-module = ["yaml", "pandas", "pandas.*"]
+module = ["yaml", "pandas", "pandas.*", "metaapi_cloud_sdk", "metaapi_cloud_sdk.*"]
 ignore_missing_imports = true
+
+# The live feed subclasses MetaApi's SynchronizationListener, which is untyped
+# (Any). Allow that in this module only.
+[[tool.mypy.overrides]]
+module = ["copier.feed.metaapi_feed"]
+disallow_subclassing_any = false
+disallow_untyped_calls = false

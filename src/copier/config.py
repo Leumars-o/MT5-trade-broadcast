@@ -22,6 +22,7 @@ class MasterConfig(BaseModel):
     metaapi_account_id: str = ""
     server_timezone: str = "Etc/GMT-3"
     poll_interval_seconds: float = 2.0
+    read_only: bool = True  # investor credentials only; never disable
 
 
 class SymbolConfig(BaseModel):
