@@ -163,6 +163,46 @@ class Repo:
         )
         self._conn.commit()
 
+    def alert_by_id(self, alert_id: int) -> sqlite3.Row | None:
+        row: sqlite3.Row | None = self._conn.execute(
+            "SELECT * FROM alerts WHERE id=?", (alert_id,)
+        ).fetchone()
+        return row
+
+    # ---------------------------------------------------------------- executions
+
+    def log_execution(
+        self,
+        alert_id: int,
+        *,
+        acted: bool,
+        fill_price: float | None = None,
+        fill_time: datetime | None = None,
+        actual_lots: float | None = None,
+        notes: str = "",
+    ) -> None:
+        """Record a manual execution against an alert (`copier log-fill`). The
+        foreign key rejects an unknown ``alert_id``. This table is the point of
+        the exercise: after ~30 fills it reveals real slippage (ARCHITECTURE.md §6)."""
+        self._conn.execute(
+            """
+            INSERT INTO executions (alert_id, acted, fill_price, fill_time, actual_lots, notes)
+            VALUES (?,?,?,?,?,?)
+            """,
+            (alert_id, 1 if acted else 0, fill_price, to_iso(fill_time), actual_lots, notes),
+        )
+        self._conn.commit()
+
+    def list_executions(self) -> list[sqlite3.Row]:
+        return self._conn.execute(
+            """
+            SELECT e.rowid AS rowid, e.alert_id, e.acted, e.fill_price, e.fill_time,
+                   e.actual_lots, e.notes, a.position_id, a.event_type
+            FROM executions e LEFT JOIN alerts a ON a.id = e.alert_id
+            ORDER BY e.rowid
+            """
+        ).fetchall()
+
     # ---------------------------------------------------------------- health
 
     def record_heartbeat(

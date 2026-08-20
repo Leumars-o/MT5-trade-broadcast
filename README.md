@@ -20,9 +20,20 @@ Implemented so far (ARCHITECTURE.md §9):
 - `notify/telegram.py` — send-only Telegram sink, backoff + token redaction (M3)
 - `notify/dispatcher.py` — insert-before-send dedupe; no dupes on restart (M3)
 - `feed/metaapi_feed.py` — live READ-ONLY MetaApi streaming feed (M4)
-- `main.py` — feed → tracker → risk → governor → formatter → (stdout|Telegram)
+- `health.py` — HealthMonitor: heartbeat, stale-feed switch, daily summary (M5)
+- `core/anomaly.py` — tripwires: volume-step, direction/P&L, drift, over-hold (M5)
+- `main.py` — feed → tracker → risk → governor → anomaly → formatter → sink
 
-Not yet implemented: anomaly tripwires + health monitor + `log-fill` CLI (M5).
+All v1 milestones (M1–M5) are implemented.
+
+### Log a manual fill
+
+```bash
+python -m copier.main log-fill --alert-id 42 --fill-price 4399.5 --actual-lots 0.03
+python -m copier.main log-fill --list
+```
+
+Populates the `executions` table so measured slippage can be reviewed after ~30 fills.
 
 ### Live (MetaApi, read-only shadow mode)
 

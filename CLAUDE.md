@@ -53,13 +53,14 @@ Milestones M1, M2, and M3 are implemented:
   connects with investor credentials and dispatches in shadow mode. The SDK is
   an optional dep (`pip install -e ".[live]"`), imported only on the live path.
 
-- M5 (in progress): `health.py` — HealthMonitor (heartbeat, stale-feed
-  dead-man's switch, disconnect/reconnect alerts, daily summary surfacing the
-  stop-basis provenance). `core/anomaly.py` — AnomalyDetector tripwires
-  (volume-step ≥2×, direction/P&L mismatch, contract drift, over-hold), wired
-  into the pipeline. The `log-fill` CLI is still TODO.
+- M5: `health.py` HealthMonitor (heartbeat, stale-feed dead-man's switch,
+  disconnect/reconnect alerts, daily summary with stop-basis provenance);
+  `core/anomaly.py` AnomalyDetector (volume-step ≥2×, direction/P&L mismatch,
+  contract drift, over-hold); `copier log-fill` CLI populating the executions
+  table for slippage measurement.
 
-See ARCHITECTURE.md §9 for the milestone order.
+All of v1 (M1–M5) is implemented. Remaining per ARCHITECTURE.md §13 is v1.5
+(live destination equity, slippage report, re-derived MAE, multi-symbol).
 
 Read-only is enforced by (1) investor password at the broker and (2) no
 trading-method references in `src/` (guarded by `test_no_order_placement`).

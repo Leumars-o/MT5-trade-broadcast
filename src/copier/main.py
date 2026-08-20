@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -31,7 +32,7 @@ from .notify import formatter
 from .notify.dispatcher import AlertDispatcher
 from .notify.telegram import TelegramNotifier
 from .store.repo import STATE_CLOSED, STATE_OPEN, STATE_PRE_EXISTING, Repo
-from .timeutil import utcnow
+from .timeutil import from_iso, utcnow
 
 log = get_logger("copier.main")
 
@@ -300,7 +301,55 @@ async def _run_send(report: Path, settings: Settings, server_tz: str | None, db:
     repo.close()
 
 
+def _log_fill_cli(argv: list[str]) -> None:
+    """`copier log-fill` — record a manual execution against an alert, or list
+    what's been recorded so far (ARCHITECTURE.md §6)."""
+    ap = argparse.ArgumentParser(prog="copier log-fill", description="Record a manual fill")
+    ap.add_argument("--db", default="copier.db")
+    ap.add_argument("--list", action="store_true", help="list recorded executions and exit")
+    ap.add_argument("--alert-id", type=int, help="alerts.id this fill is for")
+    ap.add_argument("--acted", type=int, choices=[0, 1], default=1,
+                    help="1 = you executed, 0 = you chose not to")
+    ap.add_argument("--fill-price", type=float, default=None)
+    ap.add_argument("--actual-lots", type=float, default=None)
+    ap.add_argument("--fill-time", default=None, help="ISO8601 UTC; default now")
+    ap.add_argument("--notes", default="")
+    a = ap.parse_args(argv)
+
+    repo = Repo(a.db)
+    repo.initialize()
+    try:
+        if a.list:
+            rows = repo.list_executions()
+            if not rows:
+                print("No executions recorded.")
+            for r in rows:
+                print(
+                    f"#{r['rowid']} alert={r['alert_id']} pos={r['position_id']} "
+                    f"{r['event_type']} acted={r['acted']} fill={r['fill_price']} "
+                    f"lots={r['actual_lots']} @ {r['fill_time']}  {r['notes']}"
+                )
+            return
+        if a.alert_id is None:
+            raise SystemExit("--alert-id is required (or use --list).")
+        if repo.alert_by_id(a.alert_id) is None:
+            raise SystemExit(f"No alert with id {a.alert_id}. Use --list to review.")
+        fill_time = from_iso(a.fill_time) if a.fill_time else utcnow()
+        repo.log_execution(
+            a.alert_id, acted=bool(a.acted), fill_price=a.fill_price,
+            fill_time=fill_time, actual_lots=a.actual_lots, notes=a.notes,
+        )
+        print(f"Recorded fill for alert {a.alert_id}.")
+    finally:
+        repo.close()
+
+
 def cli() -> None:
+    argv = sys.argv[1:]
+    if argv and argv[0] == "log-fill":
+        _log_fill_cli(argv[1:])
+        return
+
     ap = argparse.ArgumentParser(description="copier-bot runner")
     ap.add_argument("report", nargs="?", default="tests/fixtures/ReportHistory-51104542.xlsx")
     ap.add_argument("--config", default="config/config.yaml")
