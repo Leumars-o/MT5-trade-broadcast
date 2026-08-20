@@ -13,5 +13,5 @@ venv/
 dist/
 build/
 
-# Real broker account exports (PII: name + account number). Never commit.
-reports/*.xlsx
+# Real broker account data (exports contain PII; keep all of it out of git).
+reports/
