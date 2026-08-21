@@ -57,38 +57,42 @@ class HealthMonitor:
 
     # ------------------------------------------------------------ event inputs
 
-    def record_snapshot(self, now: datetime) -> None:
-        """A fresh broker snapshot arrived — clears staleness, beats the heart."""
-        self._last_snapshot = now
-        self._stale_alerted = False
-        self._repo.record_heartbeat(now=now, last_snapshot=now)
+    async def record_feed(self, healthy: bool, now: datetime) -> None:
+        """Called once per feed poll. ``healthy`` is the feed's own liveness
+        (connected + synchronised), NOT "did a position change" — so a quiet
+        market never looks stale. Connect/disconnect alerts are derived from
+        transitions of this flag, debounced by the poll interval (no more
+        spurious 0-second reconnects from socket-level events)."""
+        if healthy:
+            if not self._connected:
+                self._connected = True
+                downtime = (
+                    (now - self._disconnect_at).total_seconds() if self._disconnect_at else 0.0
+                )
+                await self._send(
+                    f"reconnect:{now.isoformat()}",
+                    formatter.format_health_reconnect(downtime, now),
+                    now,
+                )
+                self._disconnect_at = None
+            self._last_snapshot = now  # last HEALTHY poll
+            self._stale_alerted = False
+            self._repo.record_heartbeat(now=now, last_snapshot=now)
+        else:
+            if self._connected:
+                self._connected = False
+                self._disconnect_at = now
+                await self._send(
+                    f"disconnect:{now.isoformat()}",
+                    formatter.format_health_disconnect(now),
+                    now,
+                )
+            self._repo.record_heartbeat(now=now, last_snapshot=self._last_snapshot)
 
     def record_signal(self, age_ms: int | None) -> None:
         self._signals += 1
         if age_ms:
             self._max_age_ms = max(self._max_age_ms, age_ms)
-
-    async def note_connection(self, connected: bool, now: datetime) -> None:
-        """Feed connection state changed. Alerts only on an actual transition."""
-        if connected and not self._connected:
-            self._connected = True
-            downtime = (
-                (now - self._disconnect_at).total_seconds() if self._disconnect_at else 0.0
-            )
-            await self._send(
-                f"reconnect:{now.isoformat()}",
-                formatter.format_health_reconnect(downtime, now),
-                now,
-            )
-            self._disconnect_at = None
-        elif not connected and self._connected:
-            self._connected = False
-            self._disconnect_at = now
-            await self._send(
-                f"disconnect:{now.isoformat()}",
-                formatter.format_health_disconnect(now),
-                now,
-            )
 
     # ------------------------------------------------------------ periodic tick
 
@@ -105,6 +109,9 @@ class HealthMonitor:
             except Exception as exc:  # noqa: BLE001 - deliberately swallow all
                 log.warning("heartbeat_ping_failed", error=type(exc).__name__)
 
+        # Wedge backstop: if we still believe we're connected but have had no
+        # healthy poll in the threshold window, the pipeline task itself has
+        # stalled (a live disconnect already alerts separately via record_feed).
         if self._connected and self._last_snapshot is not None:
             gap = (now - self._last_snapshot).total_seconds()
             if gap > self._cfg.stale_feed_minutes * 60 and not self._stale_alerted:

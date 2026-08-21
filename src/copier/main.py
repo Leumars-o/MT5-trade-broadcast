@@ -164,7 +164,12 @@ async def consume_feed(
         assert isinstance(update, FeedUpdate)
         now = update.server_time or utcnow()
         if monitor is not None:
-            monitor.record_snapshot(now)
+            await monitor.record_feed(update.healthy, now)
+        # An unhealthy poll (disconnected / not synchronised) is not a source of
+        # truth — diffing it would emit phantom CLOSEDs. Skip; the watchdog above
+        # already accounts for it.
+        if not update.healthy:
+            continue
         events = tracker.diff(update.positions, now=now, resync=update.resync)
 
         for ev in events:
@@ -282,7 +287,7 @@ async def run_live(settings: Settings, token: str, db: str) -> None:
         feed = MetaApiFeed(
             token, settings.master.metaapi_account_id,
             read_only=settings.master.read_only,
-            on_connection_change=monitor.note_connection,
+            poll_interval=settings.master.poll_interval_seconds,
         )
         await feed.connect()
         stop = asyncio.Event()

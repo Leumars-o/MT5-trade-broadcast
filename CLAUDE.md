@@ -76,6 +76,14 @@ trading-method references in `src/` (guarded by `test_no_order_placement`).
 `metaapi_feed.py` must never call a trade method — the streaming connection
 object exposes them, but we only touch connect/synchronise/read/close.
 
+`MetaApiFeed` **polls `terminal_state` every `poll_interval` seconds** — it does
+NOT rely on synchronisation event callbacks. The event-driven approach failed
+silently in the field: after a reconnect MetaApi fires one sync event then goes
+quiet, so the stream stalled, the watchdog false-fired, and short trades were
+missed. Liveness = `synchronized && connected_to_broker` (carried on each
+`FeedUpdate.healthy`); the watchdog tracks the last *healthy* poll, and
+consume_feed skips diffing unhealthy polls (no phantom CLOSEDs).
+
 Credential hygiene: httpx/httpcore INFO logs are silenced in
 `logging_config.py` because they would print the bot token in the request URL.
 Live CLOSED alerts currently lack the exact exit price (it lives in MetaApi's

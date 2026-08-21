@@ -61,7 +61,11 @@ class TelegramConfig(BaseModel):
 
 
 class HealthConfig(BaseModel):
-    stale_feed_minutes: float = 5
+    # Wedge backstop: how long with no *healthy* feed poll before alerting while
+    # still nominally connected. A live disconnect alerts immediately (separately),
+    # so this only needs to catch a stalled pipeline. Kept short — many master
+    # trades close in <5 min, so a slow watchdog can't protect them.
+    stale_feed_minutes: float = 1.5
     daily_summary_time: str = "22:00"
     max_expected_hold_minutes: float = 240
     # External dead-man's switch (e.g. healthchecks.io). The bot pings this URL

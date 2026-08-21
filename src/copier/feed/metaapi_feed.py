@@ -1,10 +1,18 @@
-"""MetaApiFeed — live, READ-ONLY streaming position feed (ARCHITECTURE.md M4).
+"""MetaApiFeed — live, READ-ONLY position feed (ARCHITECTURE.md M4).
 
 Connects to the master MT5 account through MetaApi's cloud using **investor
-(read-only) credentials** and streams position snapshots over a websocket. A
-``SynchronizationListener`` turns MetaApi's incremental events into full
-snapshots (read from the authoritative ``terminal_state``), which flow through
-the exact same ``FeedUpdate`` contract as ``ReplayFeed``.
+(read-only) credentials**. It **polls the SDK's authoritative ``terminal_state``
+every ``poll_interval`` seconds** rather than trusting the synchronisation event
+callbacks. The event-driven approach fails silently: after a reconnect MetaApi
+fires one ``on_positions_synchronized`` and then, in a calm market, nothing —
+so the stream goes quiet, the dead-feed watchdog false-fires, and a trade that
+opens and closes between events is missed entirely (observed in the field).
+
+Polling ``terminal_state`` fixes all of that: a snapshot every ~2s catches a
+position open/close within the interval, and liveness is judged by
+``synchronized && connected_to_broker`` (the real signal) rather than "did a
+position change recently". Each poll carries a ``healthy`` flag; the watchdog
+tracks the last *healthy* poll, so a quiet market never looks stale.
 
 Read-only is enforced structurally, not by trusting this file:
   1. The account is provisioned with the **investor password** — the broker
@@ -20,22 +28,20 @@ imported only on the live path so the default test suite needs no broker.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable
-from datetime import datetime
+from collections.abc import AsyncIterator
 from typing import Any
 
-from metaapi_cloud_sdk import MetaApi, SynchronizationListener
+from metaapi_cloud_sdk import MetaApi
 
 from ..logging_config import get_logger
 from ..models import Direction, Position, SymbolSpec
-from ..timeutil import to_utc, utcnow
+from ..timeutil import to_utc
 from .base import FeedUpdate
 
 log = get_logger("copier.feed.metaapi")
 
 # Fallback contract sizes (oz per standard lot) if the broker spec is missing.
 _CONTRACT_FALLBACK = {"XAUUSD": 100.0, "XAGUSD": 5000.0}
-_STREAM_END = object()  # sentinel to terminate the stream
 
 
 def _strip_suffix(symbol: str) -> str:
@@ -95,50 +101,8 @@ def normalize_spec(
     )
 
 
-class _FeedListener(SynchronizationListener):
-    """Bridges MetaApi synchronisation callbacks to the feed's snapshot queue.
-
-    Every relevant event triggers a full snapshot read from ``terminal_state``.
-    ``on_positions_synchronized`` (the end of the initial/reconnect sync) is
-    flagged ``resync=True`` so the tracker treats it as reconciliation, never a
-    source of phantom CLOSED events.
-    """
-
-    def __init__(self, feed: MetaApiFeed) -> None:
-        super().__init__()
-        self._feed = feed
-
-    async def on_positions_synchronized(self, instance_index: str, synchronization_id: str) -> None:
-        await self._feed._connection_change(True)  # a no-op on the first sync
-        # The FIRST sync is a cold start, not a reconnect: emit it as a real diff
-        # so positions already open before startup surface as PRE_EXISTING (§5.2).
-        # Known state is empty, so there is nothing to phantom-close. Every LATER
-        # sync is a reconnect and must be a silent resync.
-        first_sync = not self._feed._synced_once
-        self._feed._synced_once = True
-        await self._feed._emit(resync=not first_sync)
-
-    async def on_positions_updated(
-        self, instance_index: str, positions: Any, removed_position_ids: Any
-    ) -> None:
-        await self._feed._emit(resync=False)
-
-    async def on_position_updated(self, instance_index: str, position: Any) -> None:
-        await self._feed._emit(resync=False)
-
-    async def on_position_removed(self, instance_index: str, position_id: str) -> None:
-        await self._feed._emit(resync=False)
-
-    async def on_positions_replaced(self, instance_index: str, positions: Any) -> None:
-        await self._feed._emit(resync=False)
-
-    async def on_disconnected(self, instance_index: str) -> None:
-        log.warning("metaapi_disconnected", instance=instance_index)
-        await self._feed._connection_change(False)
-
-
 class MetaApiFeed:
-    """A live ``PositionFeed`` backed by MetaApi streaming (read-only)."""
+    """A live ``PositionFeed`` backed by MetaApi, polling ``terminal_state``."""
 
     def __init__(
         self,
@@ -147,7 +111,7 @@ class MetaApiFeed:
         *,
         read_only: bool = True,
         api: Any | None = None,
-        on_connection_change: Callable[[bool, datetime], Awaitable[None]] | None = None,
+        poll_interval: float = 2.0,
     ) -> None:
         if not read_only:
             # There is no code path that trades; refusing here documents intent
@@ -156,14 +120,9 @@ class MetaApiFeed:
         self._token = token
         self._account_id = account_id
         self._api = api
-        self._on_connection_change = on_connection_change
+        self._poll_interval = poll_interval
         self._conn: Any | None = None
-        self._synced_once = False  # first sync = cold start; later syncs = reconnect
-        self._queue: asyncio.Queue[FeedUpdate | object] = asyncio.Queue()
-
-    async def _connection_change(self, connected: bool) -> None:
-        if self._on_connection_change is not None:
-            await self._on_connection_change(connected, utcnow())
+        self._closed = False
 
     async def connect(self) -> None:
         log.info("metaapi_connecting", account_id=self._account_id, mode="read_only")
@@ -172,31 +131,51 @@ class MetaApiFeed:
         await account.wait_connected()
 
         conn = account.get_streaming_connection()
-        conn.add_synchronization_listener(_FeedListener(self))
         await conn.connect()
         await conn.wait_synchronized()
         self._conn = conn
         log.info("metaapi_connected", account_id=self._account_id)
 
-    async def _emit(self, *, resync: bool) -> None:
-        """Read the authoritative position set and enqueue it as a snapshot."""
-        if self._conn is None:
-            return
-        positions = [normalize_position(p) for p in self._conn.terminal_state.positions]
-        await self._queue.put(FeedUpdate(positions, resync=resync, server_time=utcnow()))
+    def _is_healthy(self) -> bool:
+        """True only when the SDK is synchronised AND the broker terminal is
+        connected — the real liveness signal, independent of trade activity."""
+        conn = self._conn
+        if conn is None:
+            return False
+        try:
+            return bool(conn.synchronized and conn.terminal_state.connected_to_broker)
+        except Exception:  # noqa: BLE001 - any SDK state error means "not healthy"
+            return False
 
-    async def snapshot(self) -> list[Position]:
+    def _positions(self) -> list[Position]:
         if self._conn is None:
             return []
         return [normalize_position(p) for p in self._conn.terminal_state.positions]
 
+    async def snapshot(self) -> list[Position]:
+        return self._positions() if self._is_healthy() else []
+
     async def stream(self) -> AsyncIterator[FeedUpdate]:
-        while True:
-            item = await self._queue.get()
-            if item is _STREAM_END:
-                return
-            assert isinstance(item, FeedUpdate)
-            yield item
+        """Poll ``terminal_state`` every ``poll_interval``. The first *healthy*
+        poll is a cold start (surfaces PRE_EXISTING); the first healthy poll
+        after any unhealthy gap is a silent resync (avoids phantom CLOSEDs)."""
+        first_ever = True
+        prev_healthy = False
+        while not self._closed:
+            healthy = self._is_healthy()
+            if healthy:
+                positions = self._positions()
+                if first_ever:
+                    resync = False  # cold start → PRE_EXISTING surfaces (§5.2)
+                    first_ever = False
+                else:
+                    resync = not prev_healthy  # recovery poll after a gap → merge
+            else:
+                positions = []
+                resync = False
+            yield FeedUpdate(positions, resync=resync, healthy=healthy)
+            prev_healthy = healthy
+            await asyncio.sleep(self._poll_interval)
 
     async def symbol_spec(self, symbol: str) -> SymbolSpec:
         spec = None
@@ -205,6 +184,6 @@ class MetaApiFeed:
         return normalize_spec(symbol, spec)
 
     async def close(self) -> None:
-        await self._queue.put(_STREAM_END)
+        self._closed = True
         if self._conn is not None:
             await self._conn.close()

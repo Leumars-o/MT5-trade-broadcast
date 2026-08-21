@@ -39,9 +39,12 @@ class FeedUpdate:
     ``resync`` marks the first snapshot after a (re)connect: the tracker must
     treat it as a state reconciliation, not a diff source, to avoid phantom
     CLOSED events. ``server_time`` is the broker event time for this snapshot.
+    ``healthy`` is the feed's own liveness (connected + synchronised); when
+    False the snapshot is not trustworthy and must not be diffed — it drives the
+    dead-feed watchdog instead.
     """
 
-    __slots__ = ("positions", "resync", "server_time")
+    __slots__ = ("positions", "resync", "server_time", "healthy")
 
     def __init__(
         self,
@@ -49,13 +52,15 @@ class FeedUpdate:
         *,
         resync: bool = False,
         server_time: datetime | None = None,
+        healthy: bool = True,
     ) -> None:
         self.positions = positions
         self.resync = resync
         self.server_time = server_time
+        self.healthy = healthy
 
     def __repr__(self) -> str:  # pragma: no cover - debug aid
         return (
             f"FeedUpdate(n={len(self.positions)}, resync={self.resync}, "
-            f"server_time={self.server_time})"
+            f"healthy={self.healthy}, server_time={self.server_time})"
         )
