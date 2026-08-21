@@ -39,7 +39,15 @@ class RiskConfig(BaseModel):
     #                    capped by utilisation_target. The evidence-based default.
     #   "risk"         — size directly to utilisation_target of the daily budget
     #                    (the 10/15/25/50/75% risk ladder). You pick the risk %.
-    sizing_mode: Literal["proportional", "risk"] = "proportional"
+    #   "ceiling"      — a HARD stop at ceiling_points drives both the protective
+    #                    stop and the sizing (to utilisation_target of the daily
+    #                    budget). The stop is your defined worst case; MAE no
+    #                    longer sizes the trade. Anchor it to YOUR fill.
+    sizing_mode: Literal["proportional", "risk", "ceiling"] = "proportional"
+    # Hard stop distance for ceiling mode, in whole $/oz (price units, NOT broker
+    # points). e.g. 5.0 = a $5/oz stop. See §10 analysis: 4–6 region, tighter
+    # than instinct; 5 balances edge-destruction against the manual-exit safety net.
+    ceiling_points: float = 5.0
     # Balance-proportional sizing: the master trades ~0.00077 lots per $1k of its
     # balance. size_multiplier=1.0 reproduces that native profile on the
     # destination equity; >1 deliberately leverages it (edge unproven above 1×).

@@ -95,6 +95,21 @@ def test_risk_mode_sizes_to_utilisation_ladder():
         assert result.utilisation_pct == pytest.approx(util, abs=0.01)
 
 
+def test_ceiling_mode_hard_stop_drives_stop_and_size():
+    """A 5pt ceiling sets the protective stop AND the risk-per-lot; sizing goes
+    to utilisation_target of the daily budget (not stop_basis × buffer)."""
+    cfg = CFG.model_copy(update={"sizing_mode": "ceiling", "ceiling_points": 5.0})
+    pos = make_position("1", direction="sell", open_price=4399.36, open_time=at(0))
+    result = size_position(pos, XAU, cfg)
+    assert isinstance(result, SizingDecision)
+    assert result.stop_distance_points == pytest.approx(5.0)          # the ceiling
+    assert result.protective_stop_price == pytest.approx(4404.36)     # entry + 5
+    assert result.destination_lots == pytest.approx(0.75)             # 0.15 util / (5×100)
+    assert result.risk_usd == Decimal("375.0")
+    assert result.utilisation_pct == pytest.approx(0.15)
+    assert result.binding_constraint == "ceiling"
+
+
 def test_lots_always_rounded_down_never_up():
     pos = make_position("1", direction="sell", open_price=4400.0, open_time=at(0))
     result = size_position(pos, XAU, CFG)

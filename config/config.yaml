@@ -22,15 +22,17 @@ risk:
   buffer_multiplier: 1.5              # 3.90 × 1.5 = 5.85pt synthesised stop
   # sizing_mode:
   #   proportional — balance-proportional native size (× size_multiplier),
-  #                  capped by utilisation_target. Evidence-based default; the
-  #                  master trades ~0.00077 lots/$1k (CoV 0.75% over 74 trades),
-  #                  and 1× is the only regime where 86.5% win / 1.79 R:R held.
-  #   risk         — size straight to utilisation_target of the daily budget.
-  #                  Set the risk level and get the lots: 0.10, 0.15, 0.25,
-  #                  0.50, 0.75. Warning (§10.7): at 0.75, three full-buffer
-  #                  losses exhaust the $5k max drawdown — that is leverage, not
-  #                  a proven edge. Raise deliberately.
-  sizing_mode: proportional
+  #                  capped by utilisation_target. The master trades ~0.00077
+  #                  lots/$1k (CoV 0.75% over 74 trades); 1× is the only regime
+  #                  where 86.5% win / 1.79 R:R held.
+  #   risk         — size straight to utilisation_target of the daily budget
+  #                  (the 0.10/0.15/0.25/0.50/0.75 ladder).
+  #   ceiling      — HARD stop at ceiling_points sets the worst case and the
+  #                  sizing (to utilisation_target of the daily budget). The
+  #                  displayed stop is off the master's entry — anchor YOUR stop
+  #                  to YOUR fill. Whole $/oz, not broker points (5.0 = $5/oz).
+  sizing_mode: ceiling
+  ceiling_points: 5.0                 # hard stop, $/oz → 0.15 util = 0.75 lots
   native_lots_per_1k: 0.00077
   size_multiplier: 1.0
   commission_per_lot: 10.0
@@ -39,7 +41,10 @@ risk:
   max_dd_limit: 5000
   utilisation_target: 0.15            # risk cap (proportional) / driver (risk mode)
   destination_equity: 50000
-  mae_points: null                    # floating MAE STILL UNMEASURED — see §10
+  # M5-derived p100 excursion midpoint (~10.4 over 79 trades, bounded 9.65–11.14;
+  # M1 tick data would sharpen it). NOT a sizing input in ceiling mode — retained
+  # so the governor can flag if live excursions ever approach the ceiling.
+  mae_points: 10.39
 
 governor:
   soft_threshold_pct: 0.60

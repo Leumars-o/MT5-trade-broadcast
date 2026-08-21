@@ -16,7 +16,9 @@ def test_loads_repo_config(monkeypatch):
     assert settings.master.metaapi_account_id == "acct-123"
     assert settings.risk.stop_basis_points == 3.90
     assert settings.risk.buffer_multiplier == 1.5
-    assert settings.risk.mae_points is None  # floating MAE still unmeasured
+    assert settings.risk.sizing_mode == "ceiling"
+    assert settings.risk.ceiling_points == 5.0
+    assert settings.risk.mae_points == 10.39  # M5 excursion estimate, not a sizing input
     assert settings.risk.utilisation_target == 0.15
     assert "XAUUSD.f" in settings.symbols
     assert settings.symbols["XAUUSD.f"].destination_symbol == "XAUUSD"

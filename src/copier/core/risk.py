@@ -75,11 +75,17 @@ def size_position(
       ``utilisation_target`` of the daily budget.
     * ``risk`` — size directly to ``utilisation_target`` of the daily budget
       (the operator's chosen risk level: 0.10, 0.15, … 0.75).
+    * ``ceiling`` — a hard stop at ``ceiling_points`` is the worst case: it sets
+      the protective stop AND the risk-per-lot, and sizing goes to
+      ``utilisation_target`` of the daily budget. MAE no longer sizes the trade.
 
     Whichever limit bound is recorded on the decision. Returns a
     ``SizingDecision`` when copyable, else a ``SizingRefused``.
     """
-    stop_distance = cfg.stop_basis_points * cfg.buffer_multiplier
+    if cfg.sizing_mode == "ceiling":
+        stop_distance = cfg.ceiling_points
+    else:
+        stop_distance = cfg.stop_basis_points * cfg.buffer_multiplier
 
     if spec is None:
         return SizingRefused(
@@ -105,6 +111,10 @@ def size_position(
         # Utilisation is the DRIVER: size straight to the chosen risk level.
         raw_lots = cap_lots
         binding = "risk"
+    elif cfg.sizing_mode == "ceiling":
+        # Hard stop drives risk-per-lot; size to the utilisation budget.
+        raw_lots = cap_lots
+        binding = "ceiling"
     else:
         # Balance-proportional, capped by the utilisation ceiling.
         raw_lots = min(native, cap_lots)

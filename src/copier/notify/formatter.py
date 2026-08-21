@@ -98,9 +98,12 @@ def _sizing_note(sizing: SizingDecision) -> str:
         else sizing.native_lots
     )
     multiple = sizing.destination_lots / native_1x if native_1x else 0.0
+    pct = round(sizing.utilisation_pct * 100)
+    if sizing.binding_constraint == "ceiling":
+        return f"{sizing.stop_distance_points:g}pt ceiling · risk {pct}% · {multiple:.0f}× native"
     if sizing.binding_constraint == "risk":
         # Risk-driven mode: show the risk level and the leverage vs native.
-        return f"risk {round(sizing.utilisation_pct * 100)}% of daily · {multiple:.0f}× native"
+        return f"risk {pct}% of daily · {multiple:.0f}× native"
     label = "risk-capped" if sizing.binding_constraint == "risk_cap" else "proportional"
     return f"{multiple:.0f}× native · {label}"
 
@@ -132,6 +135,12 @@ def format_entry(
         _row("Sizing", _sizing_note(sizing)),
         _row("Age", f"{fmt_age(now, position.open_time)}   ·   #{position.position_id}"),
     ]
+    if sizing.binding_constraint == "ceiling":
+        # The displayed stop is off the master's entry; you'll fill later, so
+        # anchor the HARD stop to your own fill instead (§10 execution note).
+        sign = "+" if direction == "sell" else "−"
+        hint = f"fill {sign}{sizing.stop_distance_points:g} (hard — anchor to fill)"
+        lines.insert(3, _row("↳ stop", hint))
     if assessment.verdict is not GovernorVerdict.OK:
         v = assessment.verdict
         lines.append(

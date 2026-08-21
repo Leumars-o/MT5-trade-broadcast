@@ -99,7 +99,7 @@ class GovernorVerdict(StrEnum):
     SKIP = "skip"
 
 
-BindingConstraint = Literal["proportional", "risk_cap", "risk"]
+BindingConstraint = Literal["proportional", "risk_cap", "risk", "ceiling"]
 
 
 @dataclass(frozen=True, slots=True)
