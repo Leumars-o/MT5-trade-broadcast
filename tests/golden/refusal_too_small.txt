@@ -1,5 +1,5 @@
 ℹ️ SKIP 🔴 SELL XAUUSD  ·  #96484088
 Master:  0.001 @ 4400
-Reason:  too small to copy safely: native size 0.0385 lots rounds below min_lot 1
+Reason:  too small to copy safely: sized 0.0385 lots rounds below min_lot 1
 Stop:    4405.85 (5.85 pts)
 Age:     1.1s   ·   #96484088

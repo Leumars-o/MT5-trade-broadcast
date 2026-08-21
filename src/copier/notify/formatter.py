@@ -98,6 +98,9 @@ def _sizing_note(sizing: SizingDecision) -> str:
         else sizing.native_lots
     )
     multiple = sizing.destination_lots / native_1x if native_1x else 0.0
+    if sizing.binding_constraint == "risk":
+        # Risk-driven mode: show the risk level and the leverage vs native.
+        return f"risk {round(sizing.utilisation_pct * 100)}% of daily · {multiple:.0f}× native"
     label = "risk-capped" if sizing.binding_constraint == "risk_cap" else "proportional"
     return f"{multiple:.0f}× native · {label}"
 

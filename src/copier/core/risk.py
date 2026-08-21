@@ -68,12 +68,15 @@ def native_lots(cfg: RiskConfig) -> float:
 def size_position(
     position: Position, spec: SymbolSpec | None, cfg: RiskConfig
 ) -> SizingResult:
-    """Size a destination position: balance-proportional, capped by risk.
+    """Size a destination position. Two modes (``cfg.sizing_mode``):
 
-    The master is balance-proportional (a constant lots-per-$1k), so the natural
-    copy is that same rate on the destination equity (``native_lots``). We then
-    clamp so per-trade risk never exceeds ``utilisation_target`` of the daily
-    budget. Whichever limit bounds is recorded on the decision. Returns a
+    * ``proportional`` (default) — the strategy's balance-proportional native
+      size (``native_lots``), clamped so per-trade risk never exceeds
+      ``utilisation_target`` of the daily budget.
+    * ``risk`` — size directly to ``utilisation_target`` of the daily budget
+      (the operator's chosen risk level: 0.10, 0.15, … 0.75).
+
+    Whichever limit bound is recorded on the decision. Returns a
     ``SizingDecision`` when copyable, else a ``SizingRefused``.
     """
     stop_distance = cfg.stop_basis_points * cfg.buffer_multiplier
@@ -92,19 +95,26 @@ def size_position(
         position.open_price, position.direction, stop_distance, spec.digits
     )
 
-    target = native_lots(cfg)
+    native = native_lots(cfg)
     risk_per_lot = stop_distance * spec.contract_size  # $ lost per lot if stop hit
     cap_budget = cfg.daily_dd_limit * cfg.utilisation_target
     cap_lots = cap_budget / risk_per_lot if risk_per_lot > 0 else 0.0
 
-    binding: BindingConstraint = "risk_cap" if cap_lots < target else "proportional"
-    raw_lots = min(target, cap_lots)
+    binding: BindingConstraint
+    if cfg.sizing_mode == "risk":
+        # Utilisation is the DRIVER: size straight to the chosen risk level.
+        raw_lots = cap_lots
+        binding = "risk"
+    else:
+        # Balance-proportional, capped by the utilisation ceiling.
+        raw_lots = min(native, cap_lots)
+        binding = "risk_cap" if cap_lots < native else "proportional"
     lots = floor_to_step(raw_lots, spec.lot_step)  # always DOWN
 
     if lots < spec.min_lot:
         return SizingRefused(
             reason=(
-                f"too small to copy safely: native size {target:g} lots rounds "
+                f"too small to copy safely: sized {raw_lots:g} lots rounds "
                 f"below min_lot {spec.min_lot:g}"
             ),
             raw_lots=raw_lots,
@@ -127,7 +137,7 @@ def size_position(
         commission_estimate=commission,
         stop_basis_points=cfg.stop_basis_points,
         buffer_multiplier=cfg.buffer_multiplier,
-        native_lots=target,
+        native_lots=native,
         size_multiplier=cfg.size_multiplier,
         binding_constraint=binding,
     )

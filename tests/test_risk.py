@@ -80,6 +80,21 @@ def test_risk_cap_binds_when_leveraged():
     assert result.utilisation_pct == pytest.approx(0.14976)
 
 
+def test_risk_mode_sizes_to_utilisation_ladder():
+    """In 'risk' mode utilisation is the driver: set the % and get the lots,
+    independent of the native proportional size."""
+    pos = make_position("1", direction="sell", open_price=4399.36, open_time=at(0))
+    for util, expected_lots in [(0.10, 0.42), (0.15, 0.64), (0.25, 1.06), (0.75, 3.20)]:
+        cfg = CFG.model_copy(update={"sizing_mode": "risk", "utilisation_target": util})
+        result = size_position(pos, XAU, cfg)
+        assert isinstance(result, SizingDecision)
+        assert result.destination_lots == pytest.approx(expected_lots)
+        assert result.binding_constraint == "risk"
+        # actual utilisation lands just under the target (lots floored down)
+        assert result.utilisation_pct <= util
+        assert result.utilisation_pct == pytest.approx(util, abs=0.01)
+
+
 def test_lots_always_rounded_down_never_up():
     pos = make_position("1", direction="sell", open_price=4400.0, open_time=at(0))
     result = size_position(pos, XAU, CFG)

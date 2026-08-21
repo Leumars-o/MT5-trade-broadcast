@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field, SecretStr
@@ -34,6 +34,12 @@ class RiskConfig(BaseModel):
     # Stop basis: worst realised loss (p100) from the 74-trade sample, NOT an MAE.
     stop_basis_points: float = 3.90
     buffer_multiplier: float = 1.5
+    # How lots are chosen:
+    #   "proportional" — balance-proportional native size (× size_multiplier),
+    #                    capped by utilisation_target. The evidence-based default.
+    #   "risk"         — size directly to utilisation_target of the daily budget
+    #                    (the 10/15/25/50/75% risk ladder). You pick the risk %.
+    sizing_mode: Literal["proportional", "risk"] = "proportional"
     # Balance-proportional sizing: the master trades ~0.00077 lots per $1k of its
     # balance. size_multiplier=1.0 reproduces that native profile on the
     # destination equity; >1 deliberately leverages it (edge unproven above 1×).
@@ -44,7 +50,8 @@ class RiskConfig(BaseModel):
     fee_drag_pct: float = 0.26
     daily_dd_limit: float = 2500
     max_dd_limit: float = 5000
-    utilisation_target: float = 0.15    # per-trade RISK CAP, not the size driver
+    # In "proportional" mode a per-trade RISK CAP; in "risk" mode the size DRIVER.
+    utilisation_target: float = 0.15
     destination_equity: float = 50000
     # True floating MAE — still UNMEASURED; do not use for sizing until measured.
     mae_points: float | None = None

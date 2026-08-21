@@ -20,18 +20,24 @@ risk:
   # distribution stops dead at 3.90 pts → the master runs a virtual ~4pt stop.
   stop_basis_points: 3.90             # p100 worst realised loss (NOT floating MAE)
   buffer_multiplier: 1.5              # 3.90 × 1.5 = 5.85pt synthesised stop
-  # Sizing is balance-proportional, not risk-based: the master trades a constant
-  # ~0.00077 lots per $1k (CoV 0.75% across 74 trades). 1× = native profile,
-  # where the measured 86.5% win / 1.79 R:R was observed. Raising this leverages
-  # the strategy (every size discussed earlier was 11–60× native) — do not,
-  # without evidence the edge survives gold slippage at larger size.
+  # sizing_mode:
+  #   proportional — balance-proportional native size (× size_multiplier),
+  #                  capped by utilisation_target. Evidence-based default; the
+  #                  master trades ~0.00077 lots/$1k (CoV 0.75% over 74 trades),
+  #                  and 1× is the only regime where 86.5% win / 1.79 R:R held.
+  #   risk         — size straight to utilisation_target of the daily budget.
+  #                  Set the risk level and get the lots: 0.10, 0.15, 0.25,
+  #                  0.50, 0.75. Warning (§10.7): at 0.75, three full-buffer
+  #                  losses exhaust the $5k max drawdown — that is leverage, not
+  #                  a proven edge. Raise deliberately.
+  sizing_mode: proportional
   native_lots_per_1k: 0.00077
   size_multiplier: 1.0
   commission_per_lot: 10.0
   fee_drag_pct: 0.26                  # weekly PF deduction ≈ 26% of gross profit
   daily_dd_limit: 2500
   max_dd_limit: 5000
-  utilisation_target: 0.15            # PER-TRADE RISK CAP now, not the size driver
+  utilisation_target: 0.15            # risk cap (proportional) / driver (risk mode)
   destination_equity: 50000
   mae_points: null                    # floating MAE STILL UNMEASURED — see §10
 
