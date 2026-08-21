@@ -122,25 +122,29 @@ def format_entry(
     direction: Direction = position.direction
     emoji = _DIR_EMOJI[direction]
     pct = round(sizing.utilisation_pct * 100)
+    dist = sizing.stop_distance_points
+
+    # In ceiling mode the stop is a HARD stop you place yourself. The price shown
+    # is off the master's entry; you fill later, so the same line carries the
+    # rule to anchor it to YOUR fill (§10 execution note).
+    if sizing.binding_constraint == "ceiling":
+        sign = "+" if direction == "sell" else "−"
+        stop_detail = (
+            f"{_g(sizing.protective_stop_price)}  "
+            f"({dist:g}pt hard · your fill {sign}{dist:g})"
+        )
+    else:
+        stop_detail = f"{_g(sizing.protective_stop_price)}  ({dist:g} pts)"
 
     lines = [
         f"{emoji} {direction.upper()} {destination_symbol} — {sizing.destination_lots:.2f} lots",
         _row("Master", f"{_g(position.volume)} @ {_g(position.open_price)}"),
-        _row(
-            "Stop",
-            f"{_g(sizing.protective_stop_price)}  ({sizing.stop_distance_points:g} pts)",
-        ),
+        _row("Stop", stop_detail),
         _row("Risk", f"{_money(sizing.risk_usd)}  ({pct}% of daily)"),
         _row("Budget", f"{_money(assessment.budget_remaining_usd)} remaining today"),
         _row("Sizing", _sizing_note(sizing)),
         _row("Age", f"{fmt_age(now, position.open_time)}   ·   #{position.position_id}"),
     ]
-    if sizing.binding_constraint == "ceiling":
-        # The displayed stop is off the master's entry; you'll fill later, so
-        # anchor the HARD stop to your own fill instead (§10 execution note).
-        sign = "+" if direction == "sell" else "−"
-        hint = f"fill {sign}{sizing.stop_distance_points:g} (hard — anchor to fill)"
-        lines.insert(3, _row("↳ stop", hint))
     if assessment.verdict is not GovernorVerdict.OK:
         v = assessment.verdict
         lines.append(
